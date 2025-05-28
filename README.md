@@ -11,6 +11,7 @@ git clone https://github.com/RiccardoZappitelli/RCPTMaker
 
 ### Download RCPepTelegram
 ```bash
+cd RCPTMaker
 git clone https://github.com/RiccardoZappitelli/RCPTMaker
 ```
 
