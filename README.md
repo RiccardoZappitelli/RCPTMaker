@@ -1,5 +1,5 @@
 # RCPTMaker
-Use it to build <a href="https://github.com/RiccardoZappitelli/RCPepTelegram>RCPepTelegram</a> faster.
+Use it to build [RCPepTelegram](https://github.com/RiccardoZappitelli/RCPepTelegram) faster.
 
 
 ## Instructions
