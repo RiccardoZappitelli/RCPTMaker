@@ -86,6 +86,7 @@ class GUI:
         self.run_command(compile_command)
         self.change_button_text("COMPILE")
         self.enable_all()
+        self.remove_temp()
         if isinstance(bot, Bot):
             bot.sendMessage(chatid, "Your bot has been compiled")
 
