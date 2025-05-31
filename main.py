@@ -33,6 +33,7 @@ class GUI:
         self.output = ctk.CTkTextbox(self.root)
         self.output.grid(row=2, column=0, columnspan=2, padx=12, pady=12, sticky="nsew")
         self.output.configure(state="disabled")
+        self.output.tag_config("green", foreground="green")
 
         self.root.geometry("500x500")
         self.root.mainloop()
@@ -85,14 +86,15 @@ class GUI:
         self.change_button_text("COMPILING")
         self.run_command(compile_command)
         self.change_button_text("COMPILE")
+        self.writetextbox("Compiling Done", tag="green")
         self.enable_all()
         self.remove_temp()
         if isinstance(bot, Bot):
             bot.sendMessage(chatid, "Your bot has been compiled")
 
-    def writetextbox(self, content: str) -> None:
+    def writetextbox(self, content: str, tag=None) -> None:
         self.output.configure(state="normal")
-        self.output.insert(ctk.END, content)
+        self.output.insert(ctk.END, content, tags=tag)
         self.output.configure(state="disabled")
         self.output.yview(ctk.END)
 
