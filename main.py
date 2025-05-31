@@ -86,7 +86,7 @@ class GUI:
         self.change_button_text("COMPILING")
         self.run_command(compile_command)
         self.change_button_text("COMPILE")
-        self.writetextbox("Compiling Done", tag="green")
+        self.writetextbox("Compiling completed", tag="green")
         self.enable_all()
         self.remove_temp()
         if isinstance(bot, Bot):
