@@ -1,4 +1,5 @@
 import json
+from telepot import Bot
 from shutil import rmtree
 import customtkinter as ctk
 from threading import Thread
@@ -67,11 +68,17 @@ class GUI:
     def compile_pep(self) -> None:
         chdir(repo_name)
         self.disable_all()
+        token = self.gettoken()
+        chatid = self.getchatid()
+        try:
+            bot = Bot(token)
+        except:
+            bot = None
         with open("auth.json", "w") as authfile:
             json.dump(
                 {
-                    "token":self.gettoken(),
-                    "chatid":self.getchatid()
+                    "token":token,
+                    "chatid":chatid
                 }, authfile)
         self.change_button_text("CHECKING REQUIREMENTS")
         self.run_command(requirements_command)
@@ -79,6 +86,8 @@ class GUI:
         self.run_command(compile_command)
         self.change_button_text("COMPILE")
         self.enable_all()
+        if isinstance(bot, Bot):
+            bot.sendMessage(chatid, "Your bot has been compiled")
 
     def writetextbox(self, content: str) -> None:
         self.output.configure(state="normal")
