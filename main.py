@@ -1,4 +1,5 @@
 import json
+from git import Repo
 from telepot import Bot
 from shutil import rmtree
 import customtkinter as ctk
@@ -6,6 +7,7 @@ from threading import Thread
 from os import chdir, listdir
 from subprocess import Popen, PIPE, STDOUT
 from os.path import isdir, join, abspath, isfile
+from RCPepTelegram.pep2 import __version__
 
 repo_name = abspath("RCPepTelegram")
 venv_path = abspath("venv")
@@ -17,6 +19,7 @@ compile_command = f"{python_path} -m nuitka {join(repo_name, 'pep2.py')} --stand
 class GUI:
     def __init__(self) -> None:
         self.root = ctk.CTk()
+        self.root.title(f"Builder for RCPepTelegram v{__version__}")
         self.root.resizable(False, False)
         self.root.columnconfigure(1, weight=2)
         self.root.rowconfigure(3, weight=10)
