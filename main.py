@@ -7,14 +7,16 @@ from threading import Thread
 from os import chdir, listdir
 from subprocess import Popen, PIPE, STDOUT
 from os.path import isdir, join, abspath, isfile
-from RCPepTelegram.pep2 import __version__
 
 repo_name = abspath("RCPepTelegram")
 venv_path = abspath("venv")
 pip_path = join(venv_path, "Scripts", "pip.exe")
 python_path = join(venv_path, "Scripts", "python.exe")
 requirements_command = f"{pip_path} install -r requirements.txt"
-compile_command = f"{python_path} -m nuitka {join(repo_name, 'pep2.py')} --standalone --windows-console-mode=disable --onefile --follow-imports --msvc=latest --include-data-dir=vfx=vfx --include-data-dir=sfx=sfx --include-data-dir=model=model --include-data-file=auth.json=auth.json"
+compile_command = f"{python_path} -m nuitka {join(repo_name, 'pep2.py')} --windows-console-mode=disable --standalone --onefile --follow-imports --msvc=latest --include-data-dir=assets/vfx=assets/vfx --include-data-dir=assets/sfx=assets/sfx --include-data-dir=assets/model=assets/model --include-data-file=auth.json=auth.json"
+
+with open(join(repo_name, "pep2.py"), "r", encoding="utf-8") as fi:
+    __version__ = fi.read().split("\n")[10]
 
 class GUI:
     def __init__(self) -> None:
