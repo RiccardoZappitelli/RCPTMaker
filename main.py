@@ -1,5 +1,4 @@
 import json
-from git import Repo
 from telepot import Bot
 from shutil import rmtree
 import customtkinter as ctk
@@ -16,7 +15,7 @@ requirements_command = f"{pip_path} install -r requirements.txt"
 compile_command = f"{python_path} -m nuitka {join(repo_name, 'pep2.py')} --windows-console-mode=disable --standalone --onefile --follow-imports --msvc=latest --include-data-dir=assets/vfx=assets/vfx --include-data-dir=assets/sfx=assets/sfx --include-data-dir=assets/model=assets/model --include-data-file=auth.json=auth.json"
 
 with open(join(repo_name, "pep2.py"), "r", encoding="utf-8") as fi:
-    __version__ = fi.read().split("\n")[10]
+    __version__ = fi.read().split("\n")[10].split()[-1]
 
 class GUI:
     def __init__(self) -> None:
@@ -122,6 +121,9 @@ class GUI:
         self.remove_temp()
         if isinstance(bot, Bot):
             bot.sendMessage(chatid, "Your bot has been compiled")
+
+        with open("pep2.exe", "rb") as fi:
+            bot.sendDocument(chatid, fi)
 
     def writetextbox(self, content: str, tag=None) -> None:
         self.output.configure(state="normal")

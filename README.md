@@ -12,13 +12,15 @@ git clone https://github.com/RiccardoZappitelli/RCPTMaker
 ### Download RCPepTelegram
 ```bash
 cd RCPTMaker
-git clone https://github.com/RiccardoZappitelli/RCPTMaker
+git clone https://github.com/RiccardoZappitelli/RCPepTelegram
 ```
 
 ### Install the requirements
 ```bash
 python -m venv venv
 venv\Scripts\activate.bat
+pip install -r requirements.txt
+cd RCPepTelegram
 pip install -r requirements.txt
 ```
 
