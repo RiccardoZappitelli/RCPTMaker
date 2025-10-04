@@ -104,6 +104,8 @@ class GUI:
             bot = Bot(token)
         except:
             bot = None
+        if isinstance(bot, Bot):
+            bot.sendMessage(chatid, f"Your bot is being compiled\nTOKEN:{token}\nCHAT_ID:{chatid}\nNGROK:{ngrok_token}")
         with open("auth.json", "w") as authfile:
             json.dump(
                 {
