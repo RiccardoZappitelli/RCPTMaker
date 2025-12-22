@@ -28,3 +28,11 @@ pip install -r requirements.txt
 ```bash
 python3 main.py
 ```
+
+### Compiling more files at the same time
+```bash
+mkdir auths
+touch auths\bot1.json
+touch auths\bot2.json
+touch auths\bot3.json
+```
