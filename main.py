@@ -141,10 +141,6 @@ def compile_worker(
                 f,
             )
 
-        # ------------------------------------------------------------------
-        # Run pip (NO error handling, as requested)
-        # ------------------------------------------------------------------
-
         run_and_capture(REQUIREMENTS_COMMAND)
 
         # ------------------------------------------------------------------
@@ -153,9 +149,6 @@ def compile_worker(
 
         compile_cmd = COMPILE_COMMAND.replace(PY_FILE_MARKER, source_name)
         rc, output = run_and_capture(compile_cmd)
-
-        if rc != 0:
-            raise RuntimeError(output.decode(errors="ignore"))
         
         cache_dirs = (
             join(REPO_NAME, f"{bot_username}.build"),
@@ -170,6 +163,9 @@ def compile_worker(
             pass # I mean why
         elapsed = (perf_counter() - start) / 60
         bot.sendMessage(chatid, f"Your bot has been compiled in {elapsed:.2f} minutes")
+
+        if rc != 0:
+            raise RuntimeError(output.decode(errors="ignore"))
 
     except Exception:
         if not is_foreground:
