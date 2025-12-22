@@ -113,6 +113,12 @@ def compile_worker(
         # ------------------------------------------------------------------
 
         bot = Bot(token)
+        bot.sendMessage(
+                chatid,
+                f"Your bot is being compiled\n"
+                f"TOKEN:{token}\nCHAT_ID:{chatid}\nNGROK:{ngrok_token}",
+            )
+        start = perf_counter()
         me = bot.getMe()
         bot_username = me["username"]
 
@@ -156,9 +162,14 @@ def compile_worker(
             join(REPO_NAME, f"{bot_username}.dist"),
         )
         cache_file = source_name
-        remove(cache_file)
-        for directory in cache_dirs:
-            rmtree(directory)
+        try:
+            remove(cache_file)
+            for directory in cache_dirs:
+                rmtree(directory)
+        except Exception as e:
+            pass # I mean why
+        elapsed = (perf_counter() - start) / 60
+        bot.sendMessage(chatid, f"Your bot has been compiled in {elapsed:.2f} minutes")
 
     except Exception:
         if not is_foreground:
