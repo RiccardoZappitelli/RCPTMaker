@@ -1,3 +1,4 @@
-RCPepTelegram
+RCPepTelegram/
 venv/
 auths/*
+__pycache__/
