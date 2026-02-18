@@ -3,76 +3,91 @@ import random
 import sys
 
 class StringObfuscator(ast.NodeTransformer):
-    def __init__(self, obfuscate_docstrings=False):
+    def __init__(self, obfuscate_docstrings=False, debug=False):
         self.pool = []
         self.runtime_key = random.randint(1, 255)
         self.obfuscate_docstrings = obfuscate_docstrings
+        self.debug = debug
 
-    # Encrypt and store in pool
     def encrypt(self, data: bytes):
         key = random.randint(1, 255)
         encrypted = bytes((b ^ key ^ self.runtime_key) for b in data)
-        index = len(self.pool)
+        idx = len(self.pool)
         self.pool.append((list(encrypted), key))
-        return index
+        return idx
 
-    # Replace constants (strings/bytes)
+    def is_docstring_node(self, node):
+        """
+        Return True if node is a docstring (Constant or JoinedStr),
+        either plain or f-string, at module/function/class level.
+        """
+        parent = getattr(node, "parent", None)
+        if parent is None:
+            return False
+
+        # If the string is wrapped in an Expr, unwrap once
+        if isinstance(parent, ast.Expr):
+            grandparent = getattr(parent, "parent", None)
+            if grandparent is None:
+                return False
+            # the string must be the first statement of the grandparent body
+            return grandparent.body and grandparent.body[0] is parent
+        else:
+            return isinstance(parent, (ast.Module, ast.FunctionDef, ast.ClassDef)) and parent.body and parent.body[0] is node
+
     def visit_Constant(self, node):
-        # Skip "__main__"
         if isinstance(node.value, str):
+            parent_type = type(getattr(node, 'parent', None)).__name__
+            is_doc = self.is_docstring_node(node)
+            if self.debug:
+                print(f"[DEBUG] Constant string: {node.value!r}, parent: {parent_type}, is_docstring: {is_doc}")
+
             if node.value == "__main__":
                 return node
-
-            # Optionally skip docstrings
-            if isinstance(getattr(node, 'parent', None), ast.FunctionDef) and not self.obfuscate_docstrings:
-                if node is node.parent.body[0].value if node.parent.body and isinstance(node.parent.body[0], ast.Expr) else False:
-                    return node
-            if isinstance(getattr(node, 'parent', None), ast.Module) and not self.obfuscate_docstrings:
-                # Skip module docstring
-                if node is node.parent.body[0].value if node.parent.body and isinstance(node.parent.body[0], ast.Expr) else False:
-                    return node
-
+            if not self.obfuscate_docstrings and is_doc:
+                if self.debug:
+                    print("[DEBUG] Skipping docstring Constant")
+                return node
             idx = self.encrypt(node.value.encode("utf-8"))
+            if self.debug:
+                print(f"[DEBUG] Obfuscating Constant -> pool index {idx}")
             return self.build_loader(idx)
-
         elif isinstance(node.value, bytes):
             idx = self.encrypt(node.value)
+            if self.debug:
+                print(f"[DEBUG] Obfuscating bytes -> pool index {idx}")
             return self.build_loader(idx, is_bytes=True)
-
         return node
 
-    # f-string handling
     def visit_JoinedStr(self, node):
-        parts = []
+        parent_type = type(getattr(node, 'parent', None)).__name__
+        is_doc = self.is_docstring_node(node)
+        if self.debug:
+            print(f"[DEBUG] JoinedStr f-string, parent: {parent_type}, is_docstring: {is_doc}")
 
+        if not self.obfuscate_docstrings and is_doc:
+            if self.debug:
+                print("[DEBUG] Skipping docstring JoinedStr")
+            return node
+
+        parts = []
         for v in node.values:
-            if isinstance(v, ast.Constant):
+            if isinstance(v, ast.Constant) and isinstance(v.value, str):
                 if v.value == "__main__":
                     parts.append(v)
                 else:
                     idx = self.encrypt(v.value.encode("utf-8"))
+                    if self.debug:
+                        print(f"[DEBUG] Obfuscating f-string part Constant -> pool index {idx}")
                     parts.append(self.build_loader(idx))
             elif isinstance(v, ast.FormattedValue):
-                value = v.value
-                # Handle format spec
-                if v.format_spec and isinstance(v.format_spec, ast.JoinedStr):
-                    spec_parts = [sp.value for sp in v.format_spec.values if isinstance(sp, ast.Constant)]
-                    spec = "".join(spec_parts)
-                    formatted = ast.Call(
-                        func=ast.Name(id="format", ctx=ast.Load()),
-                        args=[value, ast.Constant(value=spec)],
-                        keywords=[]
-                    )
-                    parts.append(formatted)
-                else:
-                    parts.append(ast.Call(func=ast.Name(id="str", ctx=ast.Load()), args=[value], keywords=[]))
+                parts.append(ast.Call(func=ast.Name(id="str", ctx=ast.Load()), args=[v.value], keywords=[]))
 
         expr = parts[0]
         for p in parts[1:]:
             expr = ast.BinOp(left=expr, op=ast.Add(), right=p)
         return expr
 
-    # Build loader call
     def build_loader(self, idx, is_bytes=False):
         return ast.Call(
             func=ast.Name(id="_l", ctx=ast.Load()),
@@ -80,7 +95,6 @@ class StringObfuscator(ast.NodeTransformer):
             keywords=[]
         )
 
-    # Inject runtime decryptor
     def inject_runtime(self, tree):
         runtime_code = f"""
 __K = {self.runtime_key}
@@ -99,17 +113,16 @@ def _l(i, is_bytes=False):
         tree.body = runtime_ast.body + tree.body
         return tree
 
-def obfuscate(input_file, output_file, obfuscate_docstrings=False):
+def obfuscate(input_file, output_file, obfuscate_docstrings=False, debug=False):
     with open(input_file, "r", encoding="utf-8") as f:
         source = f.read()
-
     tree = ast.parse(source)
-    # Assign parent pointers for docstring detection
+
     for node in ast.walk(tree):
         for child in ast.iter_child_nodes(node):
             child.parent = node
 
-    obf = StringObfuscator(obfuscate_docstrings=obfuscate_docstrings)
+    obf = StringObfuscator(obfuscate_docstrings=obfuscate_docstrings, debug=debug)
     tree = obf.visit(tree)
     tree = obf.inject_runtime(tree)
     ast.fix_missing_locations(tree)
@@ -117,11 +130,10 @@ def obfuscate(input_file, output_file, obfuscate_docstrings=False):
     with open(output_file, "w", encoding="utf-8") as f:
         f.write(ast.unparse(tree))
 
-
 if __name__ == "__main__":
     if len(sys.argv) < 3:
-        print("usage: python obfuscator.py input.py output.py [--docstrings]")
+        print("usage: python obfuscator.py input.py output.py [--docstrings] [--debug]")
         sys.exit(1)
-
     flag_docstrings = '--docstrings' in sys.argv
-    obfuscate(sys.argv[1], sys.argv[2], obfuscate_docstrings=flag_docstrings)
+    flag_debug = '--debug' in sys.argv
+    obfuscate(sys.argv[1], sys.argv[2], obfuscate_docstrings=flag_docstrings, debug=flag_debug)
