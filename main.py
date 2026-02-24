@@ -19,7 +19,6 @@ import webview
 from cryptography.fernet import Fernet
 from utils import html_content, obfuscate
 
-#TODO code and strings obfuscation
 
 # ---------------------------------------------------------------------------
 # Paths / constants  (your original values — adjust if needed)
@@ -222,7 +221,10 @@ def compile_worker(
             KEY_PATH = join(REPO_NAME, bot_username+".key")
             real_key = create_obfuscated_key_file(KEY_PATH)
             fernet = Fernet(real_key)
-            output_queue.put(f"\nKEY FILE GENERATED FOR {bot_username}\n")
+            if is_foreground and output_queue:
+                kgs = f"\nKEY FILE GENERATED FOR {bot_username}\n"
+                output_queue.put(kgs)
+                print(kgs)
 
         bot.sendMessage(
             chatid,
@@ -236,8 +238,8 @@ def compile_worker(
         obfuscate(
             PY_FILE_PATH,
             source_name,
-            obfuscate_docstrings=False,
-            debug=DEBUG)
+            obfuscate_docstrings=True,
+            debug=False)
         print("Done obfuscating strings.")
 
         run_and_capture(REQUIREMENTS_COMMAND)
@@ -354,7 +356,9 @@ class API:
         for i, path in enumerate(auth_paths):
             foreground = (i == 0)
             p = mp.Process(target=compile_worker, args=(path, foreground, queue if foreground else None))
+            print(f"Created process for auth: {path}")
             p.start()
+            print(f"Started process for auth: {path}")
             processes.append(p)
 
         def waiter():
