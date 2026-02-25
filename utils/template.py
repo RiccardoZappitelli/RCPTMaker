@@ -20,6 +20,47 @@ html_content = """
 
 * { box-sizing:border-box; margin:0; padding:0; }
 
+.extra-options .auth-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  position: relative;
+  cursor: pointer;
+}
+
+.extra-options .auth-item input[type="checkbox"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--border);
+  border-radius: 6px;
+  background-color: var(--panel);
+  transition: all 0.2s;
+  position: relative;
+}
+
+.extra-options .auth-item input[type="checkbox"]:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.extra-options .auth-item input[type="checkbox"]:checked::after {
+  content: '✔';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  color: #fff;
+  font-size: 0.8rem;
+}
+
+.extra-options .auth-item label {
+  color: var(--text);
+  font-size: 0.95rem;
+  user-select: none;
+}
+
 body {
   background:var(--bg);
   color:var(--text);
@@ -228,6 +269,24 @@ button.outline:hover {
     </select>
   </div>
 
+  <div class="field">
+    <label>Extra Options</label>
+    <div class="extra-options">
+      <div class="auth-item">
+        <input type="checkbox" id="send_exc">
+        <label for="send_exc">Send Executable (In Parts)</label>
+      </div>
+      <div class="auth-item">
+        <input type="checkbox" id="debug">
+        <label for="debug">Debug</label>
+      </div>
+      <div class="auth-item">
+        <input type="checkbox" id="encryption">
+        <label for="encryption">Encryption</label>
+      </div>
+    </div>
+  </div>
+
   <div class="actions">
     <button class="primary" onclick="runCompile()">Compile Single</button>
     <button class="outline" onclick="openAuthSelector()">Select & Compile Multiple…</button>
@@ -255,6 +314,13 @@ function writeOut(text) {
   const t = document.getElementById('terminal');
   t.innerHTML += text.replace(/</g,'&lt;').replace(/>/g,'&gt;') + '<br>';
   t.scrollTop = t.scrollHeight;
+}
+
+function updateCompileOptions() {
+    const debug = document.getElementById("debug").checked;
+    const send_exec = document.getElementById("send_exc").checked;
+    const encryption = document.getElementById("encryption").checked;
+    window.pywebview.api.set_options(debug, send_exec, encryption);
 }
 
 function clearLog() {
@@ -294,15 +360,17 @@ function toggleSelectAll() {
 }
 
 async function confirmSelected() {
-  const checked = [...document.querySelectorAll('#authList input:checked')];
-  const selected = checked.map(el => el.value);
-  hideAuthModal();
-  if (selected.length === 0) {
-    writeOut("[INFO] No auth files selected");
-    return;
-  }
-  writeOut(`→ Starting compilation of ${selected.length} bot(s)`);
-  await window.pywebview.api.mass_compile(selected);
+    updateCompileOptions();  // <-- ensure flags are updated
+
+    const checked = [...document.querySelectorAll('#authList input:checked')];
+    const selected = checked.map(el => el.value);
+    hideAuthModal();
+    if (selected.length === 0) {
+        writeOut("[INFO] No auth files selected");
+        return;
+    }
+    writeOut(`→ Starting compilation of ${selected.length} bot(s)`);
+    await window.pywebview.api.mass_compile(selected);
 }
 
 async function openAuthSelector() {
@@ -315,13 +383,15 @@ async function openAuthSelector() {
 }
 
 async function runCompile() {
-  const t = document.getElementById('token').value.trim();
-  const c = document.getElementById('chatid').value.trim();
-  const n = document.getElementById('ngrok').value.trim();
-  const p = document.getElementById('provider').value;
+    updateCompileOptions();  // <-- ensure flags are updated
 
-  const lines = await window.pywebview.api.run_compile(t, c, n, p);
-  lines.forEach(l => writeOut(l));
+    const t = document.getElementById('token').value.trim();
+    const c = document.getElementById('chatid').value.trim();
+    const n = document.getElementById('ngrok').value.trim();
+    const p = document.getElementById('provider').value;
+
+    const lines = await window.pywebview.api.run_compile(t, c, n, p);
+    lines.forEach(l => writeOut(l));
 }
 
 async function init() {
