@@ -284,6 +284,10 @@ button.outline:hover {
         <input type="checkbox" id="encryption">
         <label for="encryption">Encryption</label>
       </div>
+      <div class="auth-item">
+        <input type="checkbox" id="assets_bundle">
+        <label for="encryption">Assets Bundle</label>
+      </div>
     </div>
   </div>
 
@@ -320,7 +324,8 @@ function updateCompileOptions() {
     const debug = document.getElementById("debug").checked;
     const send_exec = document.getElementById("send_exc").checked;
     const encryption = document.getElementById("encryption").checked;
-    window.pywebview.api.set_options(debug, send_exec, encryption);
+    const assets_bundle = document.getElementById("assets_bundle").checked;
+    window.pywebview.api.set_options(debug, send_exec, encryption, assets_bundle);
 }
 
 function clearLog() {
