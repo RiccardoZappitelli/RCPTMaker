@@ -16,7 +16,9 @@ from os import chdir, listdir, remove
 from os.path import isdir, join, abspath, isfile, split as pathsplit, exists, getsize, basename
 import traceback
 import webview
-from utils import html_content, obfuscate, SimpleFernet, make_bundle
+
+from utils import html_content, obfuscate, SimpleFernet
+from vfs_runtime.create_bundle import make_bundle
 
 
 # ---------------------------------------------------------------------------
@@ -250,7 +252,12 @@ def compile_worker(
         # Prepare assets inclusion
         if assets_bundle:
             assets_flags = ["--include-data-file=assets.bin=assets.bin"]
-            make_bundle("assets", "assets.bin")
+            if encryption:
+                print("USING ENCRYPTION FUNCTION")
+                encryption_function = fernet.encrypt
+            else:
+                encryption_function = None
+            make_bundle("assets", "assets.bin", encryption_function=encryption_function)
         else:
             assets_flags = ASSETS_COMMAND_FLAGS[:]
 
